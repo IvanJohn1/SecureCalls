@@ -6,20 +6,18 @@ pluginManagement {
     }
 }
 
-dependencyResolutionManagement {
-    // === ИСПРАВЛЕНО: Изменен режим чтобы модули могли использовать свои репозитории ===
-    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
-    repositories {
-        google()
-        mavenCentral()
-        maven { url 'https://www.jitpack.io' }
-
-        // === ДОБАВЛЕНО: локальный maven репозиторий Notifee (нужен для app.notifee:core) ===
-        // Если ваш android/settings.gradle лежит в android/, то относительный путь обычно "../node_modules/..."
-        // При монорепо (workspace выше) путь может быть другой (например "../../../node_modules/...").
-        maven { url uri("$rootDir/../node_modules/@notifee/react-native/android/libs") }
-    }
-}
+// ═══════════════════════════════════════════════════════════
+// ИСПРАВЛЕНО v8.0.0: Убран dependencyResolutionManagement
+//
+// ПРИЧИНА: dependencyResolutionManagement КОНФЛИКТУЕТ с allprojects { repositories }
+// в build.gradle. Gradle 8.8 при наличии обоих блоков:
+//   1) Тратит время на двойное разрешение зависимостей
+//   2) Печатает "Configuration on demand" и зависает на "Evaluating settings"
+//   3) Некоторые RN native модули не находят свои репозитории
+//
+// Все репозитории определены в build.gradle → allprojects { repositories }
+// Это стандартный паттерн React Native 0.73.x
+// ═══════════════════════════════════════════════════════════
 
 rootProject.name = 'SecureCallApp'
 

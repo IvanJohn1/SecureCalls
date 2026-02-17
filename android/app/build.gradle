@@ -21,7 +21,9 @@ react {
     codegenDir = file("../../node_modules/@react-native/codegen")
     cliFile = file("../../node_modules/react-native/cli.js")
 
-    debuggableVariants = ["liveDebug", "stagingDebug"]
+    // ИСПРАВЛЕНО v8.0.0: Были указаны несуществующие variants (liveDebug, stagingDebug).
+    // В проекте определены только buildTypes: debug и release.
+    debuggableVariants = ["debug"]
 
     bundleCommand = "bundle"
     bundleAssetName = "SecureCallApp.bundle"
@@ -162,7 +164,8 @@ android {
                 '**/libfbjni.so',
                 '**/libjsc.so',
                 '**/libreactnativejni.so',
-                '**/libhermes.so'  // КРИТИЧНО для Android 15!
+                '**/libhermes.so',    // КРИТИЧНО для Android 15!
+                '**/libwebrtc.so',    // react-native-webrtc: разрешение конфликта дубликатов
             ]
             
             // ДОБАВЛЕНО для Android 15: явно сохраняем debug symbols для диагностики
