@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">SecureCall</string>
+    <string name="incoming_call">Входящий звонок</string>
+    <string name="incoming_video_call">Входящий видеозвонок</string>
+    <string name="answer">Ответить</string>
+    <string name="reject">Отклонить</string>
+    <string name="end_call">Завершить</string>
+    <string name="missed_call">Пропущенный звонок</string>
+    <string name="new_message">Новое сообщение</string>
+</resources>

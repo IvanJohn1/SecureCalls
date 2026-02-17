@@ -1,0 +1,15 @@
+<resources>
+    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- Primary colors -->
+    <color name="colorPrimary">#667eea</color>
+    <color name="primary">#667eea</color>
+    <color name="colorPrimaryDark">#764ba2</color>
+    <color name="colorAccent">#4caf50</color>
+    <!-- Background colors -->
+    <color name="background">#f5f5f5</color>
+    <color name="white">#ffffff</color>
+    <color name="black">#000000</color>
+    <!-- Call colors -->
+    <color name="call_accept">#4caf50</color>
+    <color name="call_reject">#ef5350</color>
+</resources>

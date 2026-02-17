@@ -1,0 +1,30 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    // === ИСПРАВЛЕНО: Изменен режим чтобы модули могли использовать свои репозитории ===
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://www.jitpack.io' }
+
+        // === ДОБАВЛЕНО: локальный maven репозиторий Notifee (нужен для app.notifee:core) ===
+        // Если ваш android/settings.gradle лежит в android/, то относительный путь обычно "../node_modules/..."
+        // При монорепо (workspace выше) путь может быть другой (например "../../../node_modules/...").
+        maven { url uri("$rootDir/../node_modules/@notifee/react-native/android/libs") }
+    }
+}
+
+rootProject.name = 'SecureCallApp'
+
+apply from: file("../node_modules/@react-native-community/cli-platform-android/native_modules.gradle")
+applyNativeModulesSettingsGradle(settings)
+
+include ':app'
+includeBuild('../node_modules/@react-native/gradle-plugin')
