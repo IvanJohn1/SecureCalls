@@ -1,8 +1,16 @@
-# OSX
-.DS_Store
+##################################################
+# macOS
+##################################################
 
-# Xcode
+.DS_Store
+Thumbs.db
+
+##################################################
+# Xcode / iOS
+##################################################
+
 build/
+DerivedData
 *.pbxuser
 !default.pbxuser
 *.mode1v3
@@ -14,16 +22,18 @@ build/
 xcuserdata
 *.xccheckout
 *.moved-aside
-DerivedData
 *.hmap
 *.ipa
 *.xcuserstate
 ios/.xcode.env.local
+ios/Pods/
 
-# Android/IntelliJ
-build/
-.idea
-.gradle
+##################################################
+# Android / IntelliJ
+##################################################
+
+.gradle/
+.idea/
 local.properties
 *.iml
 *.hprof
@@ -31,39 +41,103 @@ local.properties
 *.keystore
 !debug.keystore
 
-# node.js
-node_modules/
-npm-debug.log
-yarn-error.log
+##################################################
+# Node.js (ALL LEVELS)
+##################################################
 
-# fastlane
+node_modules/
+**/node_modules/
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+##################################################
+# Lock files
+# (Рекомендация: package-lock.json хранить!)
+##################################################
+
+yarn.lock
+pnpm-lock.yaml
+# package-lock.json  ← оставляем в репозитории
+
+##################################################
+# Environment variables (ALL LEVELS)
+##################################################
+
+.env
+.env.*
+**/.env
+**/.env.*
+
+##################################################
+# Firebase / Private keys
+##################################################
+
+firebase-admin-key.json
+serviceAccountKey.json
+**/*serviceAccount*.json
+
+##################################################
+# Logs
+##################################################
+
+logs/
+*.log
+
+##################################################
+# Fastlane
+##################################################
+
 ios/fastlane/report.xml
 ios/fastlane/Preview.html
 ios/fastlane/screenshots
 ios/fastlane/test_output
 
-# Bundle artifact
+##################################################
+# Metro / React Native temp
+##################################################
+
+*.tmp
 *.jsbundle
 
+##################################################
 # Ruby / CocoaPods
-ios/Pods/
+##################################################
+
 vendor/bundle/
 
-# Temporary files created by Metro
-*.tmp
+##################################################
+# Build folders (ALL LEVELS)
+##################################################
 
-# Lock files (keep package-lock.json)
-yarn.lock
-pnpm-lock.yaml
+dist/
+build/
+**/dist/
+**/build/
 
-# Testing
+##################################################
+# Coverage
+##################################################
+
 coverage/
 
-# Env
-.env
-.env.local
-.env.development
-.env.production
+##################################################
+# PM2
+##################################################
 
+.pm2/
+
+##################################################
+# Temp folders
+##################################################
+
+tmp/
+temp/
+
+##################################################
 # VS Code
+##################################################
+
 .vscode/
