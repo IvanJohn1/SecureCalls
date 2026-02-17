@@ -33,7 +33,8 @@ console.log('║  CallScreen v8.0 FIX                  ║');
 console.log('╚════════════════════════════════════════╝');
 
 export default function CallScreen({route, navigation}) {
-  const {username, peer, isVideo, isCaller, offer} = route.params;
+  // [FIX v11.0] callId берётся из params; для caller-стороны также приходит через call_initiated
+  const {username, peer, isVideo, isCaller, offer, callId: initialCallId} = route.params;
 
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
@@ -48,6 +49,8 @@ export default function CallScreen({route, navigation}) {
   const offerSentRef = useRef(false);
   const isMountedRef = useRef(true);
   const isCleanedUpRef = useRef(false);
+  // [NEW v11.0] callId ref: заполняется из params (receiver) или через call_initiated (caller)
+  const callIdRef = useRef(initialCallId || null);
 
   useEffect(() => {
     console.log('═══════════════════════════════════════');
@@ -93,31 +96,38 @@ export default function CallScreen({route, navigation}) {
     try {
       console.log('CallScreen v8.0: ИНИЦИАЛИЗАЦИЯ');
 
-      // 1. Получить локальный поток
-      console.log('→ Шаг 1: Получение медиа...');
+      // 1. Загрузить ICE/TURN конфигурацию с сервера (Signal-style)
+      console.log('→ Шаг 1: Загрузка ICE конфигурации...');
+      await WebRTCService.fetchIceServers();
+      if (!isMountedRef.current) return;
+      console.log('✓ Шаг 1: ICE конфигурация загружена');
+
+      // 2. Получить локальный поток
+      console.log('→ Шаг 2: Получение медиа...');
       const stream = await WebRTCService.getLocalStream(isVideo);
       if (!isMountedRef.current) return;
       setLocalStream(stream);
-      console.log('✓ Шаг 1: Медиа получено');
+      console.log('✓ Шаг 2: Медиа получено');
 
-      // 2. Создать PeerConnection
-      console.log('→ Шаг 2: Создание PeerConnection...');
+      // 3. Создать PeerConnection
+      console.log('→ Шаг 3: Создание PeerConnection...');
       WebRTCService.createPeerConnection();
-      console.log('✓ Шаг 2: PeerConnection создан');
+      console.log('✓ Шаг 3: PeerConnection создан');
 
-      // 3. Настроить слушателей
-      console.log('→ Шаг 3: Настройка слушателей...');
+      // 4. Настроить слушателей
+      console.log('→ Шаг 4: Настройка слушателей...');
       setupListeners();
-      console.log('✓ Шаг 3: Слушатели настроены');
+      console.log('✓ Шаг 4: Слушатели настроены');
 
-      // 4. Обработка в зависимости от роли
+      // 5. Обработка в зависимости от роли
       if (isCaller) {
         // ═══════════════════════════════════════
         // ЗВОНЯЩИЙ: ЖДЁМ call_accepted, потом offer
         // ═══════════════════════════════════════
-        console.log('→ Шаг 4: Ожидание принятия звонка...');
+        console.log('→ Шаг 5: Ожидание принятия звонка...');
         if (!isMountedRef.current) return;
         setCallState('calling');
+        // callId придёт через call_initiated (слушатель настроен выше)
         // Offer будет создан когда придёт call_accepted (см. handleCallAccepted)
       } else {
         // ═══════════════════════════════════════
@@ -127,22 +137,64 @@ export default function CallScreen({route, navigation}) {
         setCallState('connecting');
 
         if (offer) {
-          console.log('→ Шаг 4: Обработка offer из params...');
+          console.log('→ Шаг 5: Обработка offer из params...');
           // Небольшая задержка чтобы PeerConnection стабилизировался
           await new Promise(resolve => setTimeout(resolve, 300));
           if (!isMountedRef.current) return;
           await handleOfferAndSendAnswer(offer);
         } else {
-          console.log('→ Шаг 4: Ожидание offer через сокет...');
+          console.log('→ Шаг 5: Ожидание offer через сокет...');
         }
       }
 
-      console.log('CallScreen v8.0: ИНИЦИАЛИЗАЦИЯ ЗАВЕРШЕНА');
+      console.log('CallScreen v11.0: ИНИЦИАЛИЗАЦИЯ ЗАВЕРШЕНА');
     } catch (error) {
-      console.error('CallScreen v8.0: ОШИБКА ИНИЦИАЛИЗАЦИИ:', error.message);
+      console.error('CallScreen v11.0: ОШИБКА ИНИЦИАЛИЗАЦИИ:', error.message);
       if (!isMountedRef.current) return;
       Alert.alert('Ошибка инициализации', error.message, [
         {text: 'OK', onPress: () => navigation.goBack()},
+      ]);
+    }
+  };
+
+  // ═══════════════════════════════════════
+  // [NEW v11.0] callId handlers
+  // ═══════════════════════════════════════
+
+  /**
+   * Получаем callId от сервера (для caller-стороны при online звонке)
+   */
+  const handleCallInitiated = data => {
+    if (data.to === peer) {
+      callIdRef.current = data.callId;
+      console.log('CallScreen v11.0: callId получен (call_initiated):', data.callId);
+    }
+  };
+
+  /**
+   * Получаем callId когда адресат offline (через push)
+   */
+  const handleCallRingingOffline = data => {
+    if (data.to === peer || data.callId) {
+      callIdRef.current = data.callId;
+      console.log('CallScreen v11.0: callId получен (call_ringing_offline):', data.callId);
+    }
+  };
+
+  /**
+   * Сервер отменил звонок по таймауту (30 сек без ответа)
+   */
+  const handleCallTimeout = data => {
+    if (!isMountedRef.current) return;
+    console.log('CallScreen v11.0: ⏰ Таймаут от сервера');
+    // Отменяем клиентский таймаут чтобы не было двойного Alert
+    if (callTimeoutRef.current) {
+      clearTimeout(callTimeoutRef.current);
+      callTimeoutRef.current = null;
+    }
+    if (!isCleanedUpRef.current) {
+      Alert.alert('Нет ответа', 'Собеседник не отвечает', [
+        {text: 'OK', onPress: () => { cleanup(); navigation.goBack(); }},
       ]);
     }
   };
@@ -226,6 +278,10 @@ export default function CallScreen({route, navigation}) {
     SocketService.on('call_rejected', handleCallRejected);
     SocketService.on('call_ended', handleCallEnded);
     SocketService.on('call_cancelled', handleCallCancelled);
+    // [NEW v11.0] callId events
+    SocketService.on('call_initiated', handleCallInitiated);
+    SocketService.on('call_ringing_offline', handleCallRingingOffline);
+    SocketService.on('call_timeout', handleCallTimeout);
   };
 
   const cleanupListeners = () => {
@@ -241,6 +297,9 @@ export default function CallScreen({route, navigation}) {
     SocketService.off('call_rejected', handleCallRejected);
     SocketService.off('call_ended', handleCallEnded);
     SocketService.off('call_cancelled', handleCallCancelled);
+    SocketService.off('call_initiated', handleCallInitiated);
+    SocketService.off('call_ringing_offline', handleCallRingingOffline);
+    SocketService.off('call_timeout', handleCallTimeout);
   };
 
   // ═══════════════════════════════════════
@@ -377,15 +436,15 @@ export default function CallScreen({route, navigation}) {
   const handleEndCall = () => {
     if (isCleanedUpRef.current) return;
 
-    console.log('CallScreen v8.0: ЗАВЕРШЕНИЕ ЗВОНКА');
+    console.log('CallScreen v11.0: ЗАВЕРШЕНИЕ ЗВОНКА, callId:', callIdRef.current);
 
     NotificationService.cancelAllNotifications();
 
-    // Если мы звонящий и звонок ещё не принят — отменяем
+    // [FIX v11.0] Передаём peer и callId — сервер отправит call_ended ТОЛЬКО собеседнику
     if (isCaller && callState === 'calling') {
-      SocketService.cancelCall(peer);
+      SocketService.cancelCall(peer, callIdRef.current);
     } else {
-      SocketService.endCall();
+      SocketService.endCall(peer, callIdRef.current);
     }
 
     cleanup();

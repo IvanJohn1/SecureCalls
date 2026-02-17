@@ -189,12 +189,14 @@ export default function HomeScreen({route, navigation}) {
   };
 
   const handleIncomingCall = data => {
-    console.log('[HomeScreen] 📞 Входящий звонок от:', data.from);
+    console.log('[HomeScreen] 📞 Входящий звонок от:', data.from, 'callId:', data.callId);
 
+    // [FIX v11.0] Передаём callId чтобы IncomingCallScreen мог его использовать в accept_call
     navigation.navigate('IncomingCall', {
       from: data.from,
       isVideo: data.isVideo,
       username: username,
+      callId: data.callId,
     });
   };
 
@@ -276,6 +278,7 @@ export default function HomeScreen({route, navigation}) {
 
   /**
    * Звонок пользователю
+   * [FIX v11.0] callId будет получен через call_initiated/call_ringing_offline в CallScreen
    */
   const makeCall = (targetUser, isVideo) => {
     console.log('[HomeScreen] 📞 Звоним:', targetUser, 'видео:', isVideo);
@@ -289,12 +292,13 @@ export default function HomeScreen({route, navigation}) {
     // Отправить запрос на звонок
     SocketService.makeCall(targetUser, isVideo);
 
-    // Перейти на экран звонка
+    // Перейти на экран звонка; callId будет получен через call_initiated в CallScreen
     navigation.navigate('Call', {
       username: username,
       peer: targetUser,
       isVideo: isVideo,
       isCaller: true,
+      callId: null, // заполнится через call_initiated/call_ringing_offline
     });
   };
 

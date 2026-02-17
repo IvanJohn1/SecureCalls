@@ -1,6 +1,7 @@
-// models/User.js - ИСПРАВЛЕННАЯ ВЕРСИЯ v7.0
+// models/User.js - ВЕРСИЯ v8.0.0
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 
 /**
  * ═══════════════════════════════════════════════════════════
@@ -116,9 +117,9 @@ UserSchema.methods.comparePassword = async function(candidatePassword) {
   }
 };
 
-// Метод для генерации токена
+// Метод для генерации токена (crypto-safe, Signal-style)
 UserSchema.methods.generateToken = function() {
-  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  return crypto.randomBytes(32).toString('hex');
 };
 
 // Метод для получения публичных данных (без пароля)

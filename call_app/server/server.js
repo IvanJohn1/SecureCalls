@@ -1,5 +1,13 @@
-// server.js - ПОЛНАЯ ВЕРСИЯ v7.2.1 FINAL (Admin + Missed Calls + Fixed UI)
+// server.js - ПОЛНАЯ ВЕРСИЯ v8.0.0 (Signal Architecture + Critical Bug Fixes)
+// CHANGELOG v8.0.0:
+// - [FIX] end_call теперь отправляется только конкретному собеседнику, а не всем (broadcast bug)
+// - [FIX] call_initiated событие отправляется звонящему с callId (для корректного завершения)
+// - [FIX] generateToken() использует crypto.randomBytes() вместо Math.random() (Signal-style)
+// - [FIX] Admin session expiry (1 час TTL)
+// - [NEW] /webrtc-config endpoint с поддержкой TURN серверов (Signal-inspired HMAC credentials)
+// - [SECURITY] Hardened token generation
 require('dotenv').config();
+const crypto = require('crypto');
 const express = require('express');
 const app = express();
 const server = require('http').createServer(app);
@@ -64,6 +72,66 @@ console.log('╚═════════════════════�
 // =============================================================================
 // HTTP ENDPOINTS
 // =============================================================================
+
+// =============================================================================
+// TURN CREDENTIAL GENERATION (Signal-inspired HMAC approach)
+// =============================================================================
+
+/**
+ * Генерирует временные TURN credentials по алгоритму как у Signal/Coturn
+ * Переменные окружения:
+ *   TURN_URL       — адрес TURN сервера (turn:your-server.com:3478)
+ *   TURN_SECRET    — общий секрет для HMAC (если используется HMAC auth)
+ *   TURN_USERNAME  — статический логин (альтернатива HMAC)
+ *   TURN_PASSWORD  — статический пароль (альтернатива HMAC)
+ */
+function generateTurnCredentials(username = 'securecall') {
+  const secret = process.env.TURN_SECRET;
+  if (!secret) return null;
+  const ttlSeconds = 86400; // 24 часа
+  const timestamp = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const turnUsername = `${timestamp}:${username}`;
+  const hmac = crypto.createHmac('sha1', secret);
+  hmac.update(turnUsername);
+  const credential = hmac.digest('base64');
+  return { username: turnUsername, credential };
+}
+
+// =============================================================================
+// WEBRTC CONFIG ENDPOINT (Signal-inspired: server delivers ICE config)
+// =============================================================================
+
+app.get('/webrtc-config', (req, res) => {
+  const iceServers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+  ];
+
+  const turnUrl = process.env.TURN_URL;
+  if (turnUrl) {
+    if (process.env.TURN_SECRET) {
+      // HMAC-based (Coturn/Signal-style)
+      const creds = generateTurnCredentials();
+      if (creds) {
+        iceServers.push({
+          urls: turnUrl,
+          username: creds.username,
+          credential: creds.credential,
+        });
+      }
+    } else if (process.env.TURN_USERNAME) {
+      // Static credentials
+      iceServers.push({
+        urls: turnUrl,
+        username: process.env.TURN_USERNAME,
+        credential: process.env.TURN_PASSWORD || '',
+      });
+    }
+  }
+
+  res.json({ iceServers });
+});
 
 app.get('/health', async (req, res) => {
   const stats = await getDatabaseStats();
@@ -1097,24 +1165,36 @@ app.get('/admin', (req, res) => {
 // АДМИН API ENDPOINTS
 // =============================================================================
 
+// Проверка и валидация admin session (с TTL)
+function isValidAdminSession(sessionId) {
+  if (!adminSessions.has(sessionId)) return false;
+  const session = adminSessions.get(sessionId);
+  if (Date.now() > session.expiresAt) {
+    adminSessions.delete(sessionId);
+    return false;
+  }
+  return true;
+}
+
 // Вход в админ панель
 app.post('/admin/login', (req, res) => {
   const { password } = req.body;
-  
-  // Пароль: Rtex
-  if (password !== 'Rtex') {
+
+  const adminPassword = process.env.ADMIN_PASSWORD || 'Rtex';
+  if (password !== adminPassword) {
     return res.json({
       success: false,
       message: 'Неверный пароль администратора'
     });
   }
-  
-  // Создаем сессию
+
+  // Создаем сессию с TTL 1 час
   const sessionId = generateToken();
   adminSessions.set(sessionId, {
     authenticated: true,
     username: 'admin',
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    expiresAt: Date.now() + 3600000, // 1 час
   });
   
   console.log('[Admin] ✅ Успешный вход в админ панель');
@@ -1128,8 +1208,8 @@ app.post('/admin/login', (req, res) => {
 // Получение списка пользователей
 app.get('/admin/users', async (req, res) => {
   const sessionId = req.headers['x-admin-session'];
-  
-  if (!adminSessions.has(sessionId)) {
+
+  if (!isValidAdminSession(sessionId)) {
     return res.json({ success: false, message: 'Не авторизован' });
   }
   
@@ -1152,8 +1232,8 @@ app.get('/admin/users', async (req, res) => {
 // Удаление пользователя
 app.post('/admin/user/delete', async (req, res) => {
   const sessionId = req.headers['x-admin-session'];
-  
-  if (!adminSessions.has(sessionId)) {
+
+  if (!isValidAdminSession(sessionId)) {
     return res.json({ success: false, message: 'Не авторизован' });
   }
   
@@ -1197,8 +1277,8 @@ app.post('/admin/user/delete', async (req, res) => {
 // Бан пользователя
 app.post('/admin/user/ban', async (req, res) => {
   const sessionId = req.headers['x-admin-session'];
-  
-  if (!adminSessions.has(sessionId)) {
+
+  if (!isValidAdminSession(sessionId)) {
     return res.json({ success: false, message: 'Не авторизован' });
   }
   
@@ -1236,8 +1316,8 @@ app.post('/admin/user/ban', async (req, res) => {
 // Разбан пользователя
 app.post('/admin/user/unban', async (req, res) => {
   const sessionId = req.headers['x-admin-session'];
-  
-  if (!adminSessions.has(sessionId)) {
+
+  if (!isValidAdminSession(sessionId)) {
     return res.json({ success: false, message: 'Не авторизован' });
   }
   
@@ -1473,7 +1553,10 @@ io.on('connection', (socket) => {
         });
 
         callData.status = 'ringing';
-        
+
+        // [FIX v8.0.0] Уведомляем звонящего о callId (нужно для корректного end_call)
+        socket.emit('call_initiated', { callId, to });
+
         // Устанавливаем таймаут для автоматического missed call
         const timeoutId = setTimeout(async () => {
           const call = activeCalls.get(callId);
@@ -1604,33 +1687,45 @@ io.on('connection', (socket) => {
   socket.on('accept_call', ({ from, callId }) => {
     const session = activeSessions.get(socket.id);
     if (!session) return;
-    
+
     console.log(`[${socket.id}] ✅ ${session.username} принял звонок от ${from}`);
-    
+
+    let resolvedCallId = callId;
+
     // Найти и обновить статус звонка
-    if (callId && activeCalls.has(callId)) {
-      const call = activeCalls.get(callId);
-      
-      // Отменить таймаут
+    if (resolvedCallId && activeCalls.has(resolvedCallId)) {
+      const call = activeCalls.get(resolvedCallId);
+
       if (call.timeoutId) {
         clearTimeout(call.timeoutId);
         call.timeoutId = null;
       }
-      
+
       call.status = 'answered';
       call.answeredAt = Date.now();
-      
+
       console.log(`[${socket.id}] ⏱️ Время ответа: ${call.answeredAt - call.timestamp}ms`);
+    } else {
+      // Fallback: найти по участникам
+      for (const [cid, call] of activeCalls.entries()) {
+        if (call.from === from && call.to === session.username) {
+          if (call.timeoutId) { clearTimeout(call.timeoutId); call.timeoutId = null; }
+          call.status = 'answered';
+          call.answeredAt = Date.now();
+          resolvedCallId = cid;
+          break;
+        }
+      }
     }
-    
+
     const callerSocketId = onlineUsers.get(from);
     if (!callerSocketId) return;
 
     socket.emit('cancel_call_notification');
-    
+
     const callerSocket = io.sockets.sockets.get(callerSocketId);
     if (callerSocket) {
-      callerSocket.emit('call_accepted', { by: session.username });
+      callerSocket.emit('call_accepted', { by: session.username, callId: resolvedCallId });
     }
   });
 
@@ -1668,34 +1763,59 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('end_call', ({ callId }) => {
+  // [FIX v8.0.0] end_call теперь отправляется ТОЛЬКО конкретному собеседнику
+  // (ранее использовался socket.broadcast.emit что рассылало событие ВСЕМ пользователям)
+  socket.on('end_call', ({ callId, to }) => {
     const session = activeSessions.get(socket.id);
     if (!session) return;
-    
+
     console.log(`[${socket.id}] 🔵 ${session.username} завершил звонок`);
-    
+
     socket.emit('cancel_call_notification');
-    socket.broadcast.emit('call_ended', { by: session.username });
-    
+
+    let peerUsername = to;
+
     // Найти и завершить звонок
     if (callId && activeCalls.has(callId)) {
       const call = activeCalls.get(callId);
-      
-      // Отменить таймаут
+
       if (call.timeoutId) {
         clearTimeout(call.timeoutId);
       }
-      
+
       call.status = 'ended';
       call.endedAt = Date.now();
-      
+
+      // Определяем собеседника из записи звонка
+      peerUsername = peerUsername || (call.from === session.username ? call.to : call.from);
+
       if (call.answeredAt) {
         const duration = call.endedAt - call.answeredAt;
         console.log(`[${socket.id}] ⏱️ Длительность звонка: ${Math.round(duration / 1000)}с`);
       }
-      
-      // Удалить
+
       activeCalls.delete(callId);
+    } else {
+      // Fallback: ищем активный звонок через перебор (если callId не передан)
+      for (const [cid, call] of activeCalls.entries()) {
+        if (call.from === session.username || call.to === session.username) {
+          peerUsername = peerUsername || (call.from === session.username ? call.to : call.from);
+          if (call.timeoutId) clearTimeout(call.timeoutId);
+          activeCalls.delete(cid);
+          break;
+        }
+      }
+    }
+
+    // [FIX] Отправить call_ended ТОЛЬКО собеседнику
+    if (peerUsername) {
+      const peerSocketId = onlineUsers.get(peerUsername);
+      if (peerSocketId) {
+        const peerSocket = io.sockets.sockets.get(peerSocketId);
+        if (peerSocket) {
+          peerSocket.emit('call_ended', { by: session.username });
+        }
+      }
     }
   });
 
@@ -1973,16 +2093,17 @@ io.on('connection', (socket) => {
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // =============================================================================
 
+// [FIX v8.0.0] Используем crypto.randomBytes вместо Math.random() (Signal-style secure tokens)
 function generateToken() {
-  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  return crypto.randomBytes(32).toString('hex');
 }
 
 function generateMessageId() {
-  return `msg_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+  return `msg_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 }
 
 function generateCallId() {
-  return `call_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+  return `call_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 }
 
 async function disconnectPreviousSession(username) {

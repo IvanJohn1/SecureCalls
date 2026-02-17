@@ -5,15 +5,17 @@ import {AppState} from 'react-native';
 
 /**
  * ═══════════════════════════════════════════════════════════
- * SocketService v10.0 PRODUCTION - ВСЕ КРИТИЧНЫЕ ИСПРАВЛЕНИЯ
+ * SocketService v11.0 — Signal Architecture
  * ═══════════════════════════════════════════════════════════
- * 
- * ИСПРАВЛЕНО:
- * 1. ✅ Автоматическое переподключение с повторной авторизацией
- * 2. ✅ Сохранение токена для восстановления сессии
- * 3. ✅ Улучшенная обработка ошибок
- * 4. ✅ Защита от потери авторизации
- * 5. ✅ Keepalive для стабильного соединения
+ *
+ * v11.0 изменения:
+ * 1. ✅ callId tracking: acceptCall/endCall/cancelCall передают callId серверу
+ * 2. ✅ call_initiated listener: получаем callId от сервера (для caller-стороны)
+ * 3. ✅ call_timeout listener: обработка таймаута звонка на сервере
+ * 4. ✅ call_ringing_offline listener: статус когда адресат offline
+ * 5. ✅ Автоматическое переподключение с повторной авторизацией
+ * 6. ✅ Сохранение токена для восстановления сессии
+ * 7. ✅ Keepalive для стабильного соединения (важно для Xiaomi MIUI)
  */
 
 console.log('╔════════════════════════════════════════╗');
@@ -191,6 +193,19 @@ class SocketService {
     this.socket.on('call_ended', data => this.notifyListeners('call_ended', data));
     this.socket.on('call_cancelled', data => this.notifyListeners('call_cancelled', data));
     this.socket.on('call_failed', data => this.notifyListeners('call_failed', data));
+    // [NEW v11.0] callId management events
+    this.socket.on('call_initiated', data => {
+      console.log('[SocketService] 📞 call_initiated, callId:', data.callId);
+      this.notifyListeners('call_initiated', data);
+    });
+    this.socket.on('call_timeout', data => {
+      console.log('[SocketService] ⏰ call_timeout');
+      this.notifyListeners('call_timeout', data);
+    });
+    this.socket.on('call_ringing_offline', data => {
+      console.log('[SocketService] 📵 call_ringing_offline, callId:', data.callId);
+      this.notifyListeners('call_ringing_offline', data);
+    });
     this.socket.on('new_message', data => this.notifyListeners('new_message', data));
     this.socket.on('message_sent', data => this.notifyListeners('message_sent', data));
     this.socket.on('message_history', data => this.notifyListeners('message_history', data));
@@ -427,47 +442,49 @@ class SocketService {
     return true;
   }
 
-  acceptCall(from) {
+  // [FIX v11.0] Передаём callId чтобы сервер мог корректно отменить таймер missed_call
+  acceptCall(from, callId) {
     if (!this.socket?.connected) {
       console.error('[SocketService] ✗ Не подключен');
       return false;
     }
 
-    this.socket.emit('accept_call', {from});
-    console.log('[SocketService] → Звонок принят');
+    this.socket.emit('accept_call', {from, callId});
+    console.log('[SocketService] → Звонок принят, callId:', callId);
     return true;
   }
 
-  rejectCall(from) {
+  rejectCall(from, callId) {
     if (!this.socket?.connected) {
       console.error('[SocketService] ✗ Не подключен');
       return false;
     }
 
-    this.socket.emit('reject_call', {from});
+    this.socket.emit('reject_call', {from, callId});
     console.log('[SocketService] → Звонок отклонен');
     return true;
   }
 
-  endCall() {
+  // [FIX v11.0] Передаём to и callId — сервер отправит call_ended ТОЛЬКО собеседнику
+  endCall(to, callId) {
     if (!this.socket?.connected) {
       console.error('[SocketService] ✗ Не подключен');
       return false;
     }
 
-    this.socket.emit('end_call');
-    console.log('[SocketService] → Звонок завершен');
+    this.socket.emit('end_call', {to, callId});
+    console.log('[SocketService] → Звонок завершен, to:', to, 'callId:', callId);
     return true;
   }
 
-  cancelCall(to) {
+  cancelCall(to, callId) {
     if (!this.socket?.connected) {
       console.error('[SocketService] ✗ Не подключен');
       return false;
     }
 
-    this.socket.emit('cancel_call', {to});
-    console.log('[SocketService] → Звонок отменен');
+    this.socket.emit('cancel_call', {to, callId});
+    console.log('[SocketService] → Звонок отменен, callId:', callId);
     return true;
   }
 
