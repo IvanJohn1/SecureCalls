@@ -23,7 +23,7 @@ buildscript {
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
         
         // Google Services для Firebase
-        classpath("com.google.gms:google-services:4.4.2")
+        classpath("com.google.gms:google-services:4.4.4")
     }
     
     // Применяем force strategy на уровне buildscript для всех конфигураций
