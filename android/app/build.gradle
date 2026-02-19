@@ -21,8 +21,6 @@ react {
     codegenDir = file("../../node_modules/@react-native/codegen")
     cliFile = file("../../node_modules/react-native/cli.js")
 
-    // ИСПРАВЛЕНО v8.0.0: Были указаны несуществующие variants (liveDebug, stagingDebug).
-    // В проекте определены только buildTypes: debug и release.
     debuggableVariants = ["debug"]
 
     bundleCommand = "bundle"
@@ -39,7 +37,7 @@ def env = System.getenv()
  * ПАРАМЕТРЫ СБОРКИ
  */
 def enableProguardInReleaseBuilds = true // Оставляем true для оптимизации и защиты
-def jscFlavor = 'org.webkit:android-jsc:+'
+def jscFlavor = 'org.webkit:android-jsc:r250230'
 
 android {
     ndkVersion rootProject.ext.ndkVersion
@@ -229,7 +227,7 @@ dependencies {
     /**
      * FIREBASE CONFIGURATION (Android 15 Optimized)
      */
-    implementation platform('com.google.firebase:firebase-bom:34.9.0')
+    implementation platform('com.google.firebase:firebase-bom:33.7.0')
     implementation 'com.google.firebase:firebase-messaging'
     implementation 'com.google.firebase:firebase-analytics'
 }
