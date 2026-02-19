@@ -7,9 +7,10 @@ buildscript {
         compileSdkVersion = 35
         targetSdkVersion = 35
         
-        // NDK r27 (27.2.12479018) — стабильная версия для React Native 0.73
-        // Для поддержки 16KB page size можно обновить до r28 (28.x)
-        ndkVersion = "27.2.12479018"
+        // NDK r26c (26.3.11579264) — совместим с reanimated 3.6.2 и RN 0.73
+        // NDK r27 (Clang 17) даёт -Werror на VLA и implicit this capture в reanimated 3.6.2
+        // NDK r26c (Clang 16) этих ошибок не имеет, поддерживает Android 15 (API 35)
+        ndkVersion = "26.3.11579264"
         kotlinVersion = "1.9.22"
     } 
     repositories {
