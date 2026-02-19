@@ -7,8 +7,8 @@ buildscript {
         compileSdkVersion = 35
         targetSdkVersion = 35
         
-        // КРИТИЧНО: NDK r28 для підтримки 16KB page size в Android 15
-        // Це виправляє помилку "empty/missing DT_HASH/DT_GNU_HASH"
+        // NDK r27 (27.2.12479018) — стабильная версия для React Native 0.73
+        // Для поддержки 16KB page size можно обновить до r28 (28.x)
         ndkVersion = "27.2.12479018"
         kotlinVersion = "1.9.22"
     } 
@@ -23,7 +23,7 @@ buildscript {
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
         
         // Google Services для Firebase
-        classpath("com.google.gms:google-services:4.4.4")
+        classpath("com.google.gms:google-services:4.4.2")
     }
     
     // Применяем force strategy на уровне buildscript для всех конфигураций
@@ -46,10 +46,8 @@ allprojects {
             // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
             url("$rootDir/../node_modules/react-native/android")
         }
-        maven {
-            // Android JSC is installed from npm
-            url("$rootDir/../node_modules/jsc-android/dist")
-        }
+        // jsc-android не используется (Hermes включён). Раскомментируйте если переключитесь на JSC:
+        // maven { url("$rootDir/../node_modules/jsc-android/dist") }
         // Локальный репозиторий Notifee (Критично не терять!)
         maven {
             url("$rootDir/../node_modules/@notifee/react-native/android/libs")
