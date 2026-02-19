@@ -19,10 +19,7 @@
   "author": "SecureCall Team",
   "license": "MIT",
   "dependencies": {
-    "@react-native-async-storage/async-storage": "^2.2.0",
-    "@react-navigation/native": "^7.1.28",
-    "@react-navigation/stack": "^7.7.1",
-    "bcrypt": "^6.0.0",
+    "bcrypt": "^5.1.1",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
@@ -30,19 +27,13 @@
     "firebase-admin": "^12.0.0",
     "helmet": "^7.1.0",
     "mongoose": "^8.0.3",
-    "react-native-gesture-handler": "^2.30.0",
-    "react-native-permissions": "^5.4.4",
-    "react-native-safe-area-context": "^5.6.2",
-    "react-native-screens": "^4.23.0",
-    "react-native-webrtc": "^111.0.0",
-    "socket.io": "^4.6.0",
-    "socket.io-client": "^4.6.0"
+    "socket.io": "^4.6.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
   },
   "engines": {
-    "node": ">=16.0.0",
-    "npm": ">=8.0.0"
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   }
 }
