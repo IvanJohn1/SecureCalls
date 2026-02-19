@@ -162,7 +162,8 @@ android {
                 '**/libfbjni.so',
                 '**/libjsc.so',
                 '**/libreactnativejni.so',
-                '**/libhermes.so'  // КРИТИЧНО для Android 15!
+                '**/libhermes.so',    // КРИТИЧНО для Android 15!
+                '**/libwebrtc.so',    // react-native-webrtc: разрешение конфликта дубликатов
             ]
             
             // ДОБАВЛЕНО для Android 15: явно сохраняем debug symbols для диагностики

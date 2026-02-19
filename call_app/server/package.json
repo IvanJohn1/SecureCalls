@@ -1,7 +1,7 @@
 {
   "name": "securecall-server",
-  "version": "4.0.0",
-  "description": "SecureCall Server v4.0 - с MongoDB, Firebase и оффлайн поддержкой",
+  "version": "8.0.0",
+  "description": "SecureCall Server v8.0.0 - MongoDB, Firebase, Signal-inspired architecture",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -14,7 +14,8 @@
     "video-call",
     "messaging",
     "firebase",
-    "push-notifications"
+    "push-notifications",
+    "signal-architecture"
   ],
   "author": "SecureCall Team",
   "license": "MIT",

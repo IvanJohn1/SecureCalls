@@ -11,6 +11,7 @@ import {
   PermissionsAndroid,
   Platform,
   Linking,
+  NativeModules,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SocketService from '../services/SocketService';
@@ -18,15 +19,36 @@ import ConnectionService from '../services/ConnectionService';
 
 /**
  * ═══════════════════════════════════════════════════════════
- * LoginScreen v11.0 PRODUCTION - ANDROID 15 READY
+ * LoginScreen v12.0 — Android 15 + Xiaomi MIUI Ready
  * ═══════════════════════════════════════════════════════════
- * 
- * КРИТИЧНЫЕ ИЗМЕНЕНИЯ:
+ *
+ * v12.0 изменения:
  * 1. ✅ Запрос всех разрешений включая Android 15 специфичные
  * 2. ✅ POST_NOTIFICATIONS для Android 13+
  * 3. ✅ USE_FULL_SCREEN_INTENT для Android 15+
- * 4. ✅ Graceful handling если разрешения не даны
+ * 4. ✅ XIAOMI MIUI: Определение устройства и показ инструкции
+ *      по включению Автозапуска (Autostart) — критично для
+ *      получения входящих звонков при закрытом приложении!
+ * 5. ✅ Battery optimization prompt для Xiaomi
  */
+
+/**
+ * Определяем Xiaomi/MIUI устройство по system properties
+ * На Xiaomi устройствах manufacturer = "Xiaomi"
+ */
+function isXiaomiDevice() {
+  if (Platform.OS !== 'android') return false;
+  try {
+    // NativeModules.PlatformConstants доступен в RN
+    const {PlatformConstants} = NativeModules;
+    if (PlatformConstants) {
+      const manufacturer = (PlatformConstants.Manufacturer || '').toLowerCase();
+      const brand = (PlatformConstants.Brand || '').toLowerCase();
+      return manufacturer.includes('xiaomi') || brand.includes('xiaomi') || brand.includes('redmi') || brand.includes('poco');
+    }
+  } catch (_) {}
+  return false;
+}
 
 console.log('╔════════════════════════════════════════╗');
 console.log('║  LoginScreen v11.0 PRODUCTION         ║');
@@ -180,12 +202,52 @@ export default function LoginScreen({navigation}) {
   };
 
   /**
+   * XIAOMI MIUI: Показываем инструкцию по включению автозапуска
+   * Это КРИТИЧНО для получения входящих звонков когда приложение закрыто
+   */
+  const checkAndPromptMiuiAutostart = async () => {
+    if (!isXiaomiDevice()) return;
+
+    const miuiWarningShown = await AsyncStorage.getItem('miui_autostart_warned');
+    if (miuiWarningShown) return; // Показываем только один раз
+
+    console.log('[LoginScreen] 📱 Обнаружено Xiaomi/MIUI устройство');
+
+    Alert.alert(
+      '⚠️ Xiaomi: Требуется настройка',
+      'Для надёжного получения входящих звонков на Xiaomi/MIUI необходимо:\n\n' +
+      '1. Настройки → Приложения → SecureCall\n' +
+      '   → Автозапуск: ВКЛЮЧИТЬ ✓\n\n' +
+      '2. Настройки → Батарея → Экономия энергии\n' +
+      '   → SecureCall: "Без ограничений"\n\n' +
+      'Без этих настроек входящие звонки могут не работать когда приложение закрыто.',
+      [
+        {
+          text: 'Открыть настройки',
+          onPress: () => {
+            Linking.openSettings();
+            AsyncStorage.setItem('miui_autostart_warned', 'true');
+          },
+        },
+        {
+          text: 'Позже',
+          style: 'cancel',
+          onPress: () => AsyncStorage.setItem('miui_autostart_warned', 'true'),
+        },
+      ],
+    );
+  };
+
+  /**
    * Проверка автоматического входа
    */
   const checkAutoLogin = async () => {
     try {
       // Запросить разрешения ПЕРВЫМ ДЕЛОМ
       await requestPermissions();
+
+      // Проверка MIUI-специфичных настроек (только для Xiaomi)
+      checkAndPromptMiuiAutostart();
 
       const savedUsername = await AsyncStorage.getItem('username');
       const savedToken = await AsyncStorage.getItem('token');
@@ -302,7 +364,7 @@ export default function LoginScreen({navigation}) {
       <View style={styles.header}>
         <Text style={styles.title}>SecureCall</Text>
         <Text style={styles.subtitle}>Безопасные звонки</Text>
-        <Text style={styles.version}>v11.0 • Android 15 Ready</Text>
+        <Text style={styles.version}>v12.0 • Android 15 + Xiaomi Ready</Text>
       </View>
 
       {/* Баннер статуса разрешений */}

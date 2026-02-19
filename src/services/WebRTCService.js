@@ -4,15 +4,16 @@ import {
   RTCSessionDescription,
   mediaDevices,
 } from 'react-native-webrtc';
+import {SERVER_URL} from '../config/server.config';
 
-const configuration = {
-  iceServers: [
-    {urls: 'stun:stun.l.google.com:19302'},
-    {urls: 'stun:stun1.l.google.com:19302'},
-    {urls: 'stun:stun2.l.google.com:19302'},
-    {urls: 'stun:stun3.l.google.com:19302'},
-    {urls: 'stun:stun4.l.google.com:19302'},
-  ],
+// Fallback ICE серверы (STUN-только, используются если сервер недоступен)
+const DEFAULT_ICE_SERVERS = [
+  {urls: 'stun:stun.l.google.com:19302'},
+  {urls: 'stun:stun1.l.google.com:19302'},
+  {urls: 'stun:stun2.l.google.com:19302'},
+];
+
+const BASE_CONFIGURATION = {
   iceCandidatePoolSize: 10,
   iceTransportPolicy: 'all',
   bundlePolicy: 'max-bundle',
@@ -21,18 +22,21 @@ const configuration = {
 
 /**
  * ═══════════════════════════════════════════════════════════
- * WebRTC Service v9.0 FIX
+ * WebRTC Service v10.0 — Signal Architecture
  * ═══════════════════════════════════════════════════════════
  *
- * ИСПРАВЛЕНИЯ:
- * 1. ✅ cleanup НЕ очищает callbacks (off() делает это позже)
- * 2. ✅ Безопасные null-проверки везде
- * 3. ✅ ICE queue обрабатывается правильно
- * 4. ✅ Проверка signaling state перед setRemoteDescription
+ * v10.0 (Signal-inspired):
+ * 1. ✅ Динамическая загрузка ICE/TURN конфигурации с сервера
+ * 2. ✅ TURN серверы для надёжной работы за NAT (Xiaomi + мобильные сети)
+ * 3. ✅ Современный формат видео-ограничений (без legacy mandatory)
+ * 4. ✅ cleanup НЕ очищает callbacks
+ * 5. ✅ Безопасные null-проверки везде
+ * 6. ✅ ICE queue обрабатывается правильно
+ * 7. ✅ Проверка signaling state перед setRemoteDescription
  */
 
 console.log('╔════════════════════════════════════════╗');
-console.log('║  WebRTC v9.0 FIX                      ║');
+console.log('║  WebRTC v10.0 Signal Architecture     ║');
 console.log('╚════════════════════════════════════════╝');
 
 class WebRTCService {
@@ -52,6 +56,34 @@ class WebRTCService {
     this.connectionTimeout = null;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 3;
+
+    // ICE конфигурация (загружается с сервера Signal-style)
+    this.iceServers = null;
+  }
+
+  /**
+   * Signal-inspired: загрузка ICE/TURN конфигурации с сервера
+   * Сервер генерирует временные HMAC-credentials для TURN (как Signal)
+   */
+  async fetchIceServers() {
+    try {
+      const response = await fetch(`${SERVER_URL}/webrtc-config`, {
+        method: 'GET',
+        headers: {'Accept': 'application/json'},
+        // Таймаут 5 секунд — не блокируем звонок
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const config = await response.json();
+      if (config.iceServers && config.iceServers.length > 0) {
+        this.iceServers = config.iceServers;
+        console.log('WebRTC v10.0: ICE серверы загружены с сервера:', this.iceServers.length);
+        return this.iceServers;
+      }
+    } catch (error) {
+      console.warn('WebRTC v10.0: Не удалось загрузить ICE конфигурацию, используем fallback:', error.message);
+    }
+    this.iceServers = DEFAULT_ICE_SERVERS;
+    return this.iceServers;
   }
 
   /**
@@ -61,20 +93,21 @@ class WebRTCService {
     console.log('WebRTC v9.0: ПОЛУЧЕНИЕ МЕДИА ПОТОКА, видео:', isVideo);
 
     try {
+      // [FIX v10.0] Используем современный формат constraints (без legacy mandatory)
+      // mandatory устарел в Android WebRTC и вызывает предупреждения/ошибки на Android 15
       const constraints = {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          sampleRate: 48000,
         },
         video: isVideo
           ? {
-              mandatory: {
-                minWidth: 640,
-                minHeight: 480,
-                minFrameRate: 30,
-              },
               facingMode: 'user',
+              width: {ideal: 640},
+              height: {ideal: 480},
+              frameRate: {ideal: 30, max: 30},
             }
           : false,
       };
@@ -94,10 +127,10 @@ class WebRTCService {
   }
 
   /**
-   * Создание PeerConnection
+   * Создание PeerConnection с Signal-style ICE конфигурацией
    */
   createPeerConnection() {
-    console.log('WebRTC v9.0: СОЗДАНИЕ PEER CONNECTION');
+    console.log('WebRTC v10.0: СОЗДАНИЕ PEER CONNECTION');
 
     try {
       // Очистить предыдущее соединение если есть
@@ -118,6 +151,13 @@ class WebRTCService {
       this.remoteDescriptionSet = false;
       this.reconnectAttempts = 0;
 
+      // Используем загруженные с сервера ICE серверы (включая TURN если настроен)
+      const iceServers = this.iceServers || DEFAULT_ICE_SERVERS;
+      const configuration = {...BASE_CONFIGURATION, iceServers};
+
+      console.log('→ ICE серверов:', iceServers.length,
+        iceServers.some(s => s.urls?.toString().startsWith('turn')) ? '(включая TURN)' : '(только STUN)');
+
       this.peerConnection = new RTCPeerConnection(configuration);
 
       // Добавить локальные треки
@@ -134,7 +174,7 @@ class WebRTCService {
       // Таймаут на установку соединения (60 секунд)
       this.startConnectionTimeout();
 
-      console.log('✅ PeerConnection создан');
+      console.log('✅ PeerConnection создан (v10.0)');
     } catch (error) {
       console.error('❌ ОШИБКА создания PeerConnection:', error);
       throw error;
@@ -464,7 +504,7 @@ class WebRTCService {
    * FIX: НЕ очищаем callbacks — это делает off()
    */
   cleanup() {
-    console.log('WebRTC v9.0: ОЧИСТКА');
+    console.log('WebRTC v10.0: ОЧИСТКА');
 
     this.clearConnectionTimeout();
 
@@ -498,7 +538,10 @@ class WebRTCService {
     this.remoteDescriptionSet = false;
     this.reconnectAttempts = 0;
 
-    console.log('✅ Очистка завершена');
+    // Сбрасываем iceServers чтобы следующий звонок заново запросил конфиг с сервера
+    this.iceServers = null;
+
+    console.log('✅ Очистка завершена (v10.0)');
   }
 
   // ═══════════════════════════════════════

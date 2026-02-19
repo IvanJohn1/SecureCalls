@@ -29,7 +29,8 @@ console.log('║  IncomingCallScreen v7.0 FIX          ║');
 console.log('╚════════════════════════════════════════╝');
 
 export default function IncomingCallScreen({route, navigation}) {
-  const {from, isVideo, username} = route.params;
+  // [FIX v11.0] callId нужен для корректного accept_call и отмены missed_call таймера
+  const {from, isVideo, username, callId} = route.params;
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [receivedOffer, setReceivedOffer] = useState(null);
@@ -124,16 +125,17 @@ export default function IncomingCallScreen({route, navigation}) {
       // Отменить уведомления
       await NotificationService.cancelAllNotifications();
 
-      // Отправить accept — сервер уведомит звонящего
-      SocketService.acceptCall(from);
+      // [FIX v11.0] Передаём callId — сервер отменит missed_call таймер
+      SocketService.acceptCall(from, callId);
 
-      // Перейти на CallScreen с offer (если был получен)
+      // Перейти на CallScreen с offer (если был получен) и callId
       navigation.replace('Call', {
         username: username,
         peer: from,
         isVideo: isVideo,
         isCaller: false,
         offer: receivedOffer, // ← Передаём offer если был получен до принятия
+        callId: callId,       // ← Передаём callId для end_call/cancel_call
       });
 
       console.log('✓ Навигация на CallScreen, offer:', !!receivedOffer);
@@ -155,7 +157,7 @@ export default function IncomingCallScreen({route, navigation}) {
 
     try {
       await NotificationService.cancelAllNotifications();
-      SocketService.rejectCall(from);
+      SocketService.rejectCall(from, callId);
       navigation.goBack();
     } catch (error) {
       console.error('✗ Ошибка отклонения:', error);
