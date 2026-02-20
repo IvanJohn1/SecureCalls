@@ -7,8 +7,8 @@ buildscript {
         compileSdkVersion = 35
         targetSdkVersion = 35
         
-        // NDK r27 (27.2.12479018) — стабильная версия для React Native 0.73
-        // Для поддержки 16KB page size можно обновить до r28 (28.x)
+        // NDK r27 (Clang 17) — требует postinstall-патч для reanimated 3.6.2
+        // Патч добавляет -Wno-error=vla-cxx-extension и -Wno-error=deprecated-this-capture
         ndkVersion = "27.2.12479018"
         kotlinVersion = "1.9.22"
     } 
@@ -23,7 +23,7 @@ buildscript {
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
         
         // Google Services для Firebase
-        classpath("com.google.gms:google-services:4.4.2")
+        classpath("com.google.gms:google-services:4.4.4")
     }
     
     // Применяем force strategy на уровне buildscript для всех конфигураций
