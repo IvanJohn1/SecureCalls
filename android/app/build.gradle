@@ -124,50 +124,40 @@ android {
     }
 
     // ═══════════════════════════════════════════════════════════
-    // КРИТИЧНО: Splits по ABI для уменьшения размера и стабильности
+    // КРИТИЧНО: Splits по ABI — все платформы для кросс-совместимости
+    // Включены x86/x86_64 для эмуляторов и устройств ChromeOS/Intel
     // ═══════════════════════════════════════════════════════════
     splits {
         abi {
             enable true
             reset()
-            // Для PRODUCTION (реальные устройства):
-            include "armeabi-v7a", "arm64-v8a"
-            // Для ТЕСТИРОВАНИЯ на эмуляторе раскомментируйте:
-            // include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
-            universalApk false // Установите true, если нужен универсальный APK
+            include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+            universalApk true
         }
     }
 
-    /**
-     * ═══════════════════════════════════════════════════════════
-     * КРИТИЧНО ДЛЯ ANDROID 15 (16KB PAGE SIZE):
-     * 
-     * ИЗМЕНЕНИЯ для исправления краша на Xiaomi Redmi с Android 15:
-     * 1. Явно указываем что НЕ используем legacy packaging
-     * 2. Добавляем libhermes.so в pickFirsts
-     * 3. Используем uncompressed native libs (по умолчанию в AGP 8.5.2)
-     * 
-     * Это исправляет ошибку: "dlopen failed: empty/missing DT_HASH/DT_GNU_HASH"
-     * ═══════════════════════════════════════════════════════════
-     */
     packaging {
-        // КРИТИЧНО для Android 15: НЕ использовать legacy packaging!
-        // useLegacyPackaging = false  // Это значение по умолчанию, явно не указываем
-        
+        // ═══════════════════════════════════════════════════════════
+        // КРИТИЧНО ДЛЯ ANDROID 15 (16KB PAGE SIZE):
+        // useLegacyPackaging = true заставляет AGP упаковывать .so файлы
+        // в сжатом виде. При установке система ИЗВЛЕКАЕТ их на диск
+        // и выравнивает по границе страницы (16KB). Это обходит
+        // SIGSEGV (SEGV_ACCERR) в ElfReader::LoadSegments, вызванный
+        // тем, что ELF-сегменты в .so имеют p_align=4096 (4KB),
+        // несовместимый с 16KB page size при прямом mmap из APK.
+        // ═══════════════════════════════════════════════════════════
         jniLibs {
-            // ВАЖНО: pickFirst для разрешения конфликтов нативных библиотек
-            // ДОБАВЛЕНО: libhermes.so - основная причина краша на Android 15
+            useLegacyPackaging = true
+
             pickFirsts += [
                 '**/libc++_shared.so',
                 '**/libfbjni.so',
                 '**/libjsc.so',
                 '**/libreactnativejni.so',
-                '**/libhermes.so',    // КРИТИЧНО для Android 15!
-                '**/libwebrtc.so',    // react-native-webrtc: разрешение конфликта дубликатов
+                '**/libhermes.so',
+                '**/libwebrtc.so',
             ]
-            
-            // ДОБАВЛЕНО для Android 15: явно сохраняем debug symbols для диагностики
-            // Помогает при краше получить читаемый stacktrace
+
             keepDebugSymbols += ['**/libhermes.so', '**/libreactnativejni.so']
         }
         
