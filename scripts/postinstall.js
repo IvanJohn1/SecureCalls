@@ -9,7 +9,11 @@
  *   2. -Wdeprecated-this-capture : implicit 'this' capture in [=] lambdas
  *
  * Three-layer defence:
- *   A) Fix WorkletRuntimeDecorator.cpp — replace VLA with unique_ptr
+ *   A) Fix WorkletRuntimeDecorator.cpp — two sub-patches:
+ *        A1) replace VLA with unique_ptr<jsi::Value[]>
+ *        A2) cast args to const jsi::Value* at the call site so Clang 18
+ *            selects the non-template call(Runtime&,const Value*,size_t)
+ *            overload instead of the variadic template
  *   B) Fix NativeReanimatedModule.cpp  — add explicit 'this' to lambdas
  *   C) Fix android/build.gradle        — append -Wno-* flags so the build
  *      succeeds even if A/B patterns drift across minor reanimated versions
@@ -42,35 +46,49 @@ function patch(relPath, label, transformFn) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// A) WorkletRuntimeDecorator.cpp — VLA fix
+// A) WorkletRuntimeDecorator.cpp — two independent sub-patches
 //
-//    Error: [-Werror,-Wvla-cxx-extension]
-//    Line:  jsi::Value args[argsSize]; // NOLINT(runtime/arrays)
+//  A1) VLA fix (line 110)
+//      Error: [-Werror,-Wvla-cxx-extension]
+//      jsi::Value args[argsSize];  →  unique_ptr + jsi::Value* args
 //
-//    Fix:   Replace the C VLA with a heap-allocated unique_ptr<jsi::Value[]>.
-//           The local pointer `args` keeps the same type (jsi::Value*) so all
-//           downstream code that uses args[i] or passes args to functions
-//           requiring const jsi::Value* continues to compile unchanged.
+//  A2) Call-site fix (line 116)
+//      After A1 `args` is jsi::Value* (a named lvalue).  Clang 18 overload
+//      resolution then selects the variadic template
+//        call<jsi::Value*&, unsigned long&>
+//      instead of the non-template
+//        call(Runtime&, const Value*, size_t)
+//      because forwarding references are an exact match for lvalues while
+//      `const Value*` needs a qualification conversion.
+//      Casting to `const jsi::Value*` turns the argument into a const-pointer
+//      rvalue — an exact match for the non-template — so that overload wins.
+//
+//  The two sub-patches are INDEPENDENT: A2 must run even when A1 is skipped
+//  (i.e. after a previous npm install already applied A1).
 // ─────────────────────────────────────────────────────────────────────────────
 patch(
   'Common/cpp/ReanimatedRuntime/WorkletRuntimeDecorator.cpp',
-  'WorkletRuntimeDecorator.cpp (VLA → unique_ptr)',
+  'WorkletRuntimeDecorator.cpp (VLA + call-site fix)',
   (src) => {
-    const VLA = 'jsi::Value args[argsSize]; // NOLINT(runtime/arrays)';
-    if (!src.includes(VLA)) return src; // already patched or different version
-
-    // Add <memory> include once (needed for std::unique_ptr).
     let out = src;
-    if (!out.includes('#include <memory>')) {
-      // Insert right after the first #include line.
-      out = out.replace(/^(#include\s+\S+[^\n]*)$/m, '$1\n#include <memory>');
+
+    // ── A1: replace VLA with unique_ptr (only if the VLA is still present) ──
+    const VLA = 'jsi::Value args[argsSize]; // NOLINT(runtime/arrays)';
+    if (out.includes(VLA)) {
+      if (!out.includes('#include <memory>')) {
+        out = out.replace(/^(#include\s+\S+[^\n]*)$/m, '$1\n#include <memory>');
+      }
+      // Regex captures indentation so both lines align correctly.
+      out = out.replace(
+        /^([ \t]*)jsi::Value args\[argsSize\]; \/\/ NOLINT\(runtime\/arrays\)$/m,
+        '$1std::unique_ptr<jsi::Value[]> argsStorage(new jsi::Value[argsSize]);\n$1jsi::Value* args = argsStorage.get();'
+      );
     }
 
-    // Regex captures leading whitespace so both replacement lines align correctly.
-    out = out.replace(
-      /^([ \t]*)jsi::Value args\[argsSize\]; \/\/ NOLINT\(runtime\/arrays\)$/m,
-      '$1std::unique_ptr<jsi::Value[]> argsStorage(new jsi::Value[argsSize]);\n$1jsi::Value* args = argsStorage.get();'
-    );
+    // ── A2: fix the call site (always runs independently of A1) ─────────────
+    const CALL_BAD  = 'remoteFun.asObject(rt).asFunction(rt).call(rt, args, argsSize);';
+    const CALL_GOOD = 'remoteFun.asObject(rt).asFunction(rt).call(rt, static_cast<const jsi::Value*>(args), argsSize);';
+    out = out.split(CALL_BAD).join(CALL_GOOD);
 
     return out;
   }
