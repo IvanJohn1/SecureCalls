@@ -12,12 +12,12 @@ import android.util.Log;
 import java.util.List;
 
 /**
- * MainApplication v2.0 FIX
+ * MainApplication v3.0 — Android 15 (16KB page size) fix
  *
- * ИСПРАВЛЕНИЯ:
- * - try-catch вокруг SoLoader.init для предотвращения SIGSEGV на Android 15
- * - Правильная регистрация native packages
- * - Защита от дублирования пакетов
+ * SIGSEGV (SEGV_ACCERR) при загрузке .so файлов вызван несовместимостью
+ * ELF p_align=4096 с 16KB page size. Решение на уровне манифеста:
+ * extractNativeLibs="true" + useLegacyPackaging=true в Gradle.
+ * SoLoader.init обёрнут в try-catch для обработки UnsatisfiedLinkError.
  */
 public class MainApplication extends Application implements ReactApplication {
     private static final String TAG = "MainApplication";
@@ -68,14 +68,21 @@ public class MainApplication extends Application implements ReactApplication {
     public void onCreate() {
         super.onCreate();
 
-        // FIX: Безопасная инициализация SoLoader
-        // На Android 15 SoLoader может вызвать SIGSEGV если extractNativeLibs=false
+        // Инициализация SoLoader.
+        // SIGSEGV при загрузке .so — нативный сигнал, не ловится Java try-catch.
+        // Основной фикс — extractNativeLibs=true в манифесте + useLegacyPackaging
+        // в Gradle, которые заставляют систему извлекать .so на диск
+        // с правильным выравниванием страниц (16KB на Android 15).
+        // try-catch здесь обрабатывает только Java-уровневые ошибки (UnsatisfiedLinkError).
         try {
             SoLoader.init(this, /* native exopackage */ false);
-            Log.d(TAG, "✅ SoLoader инициализирован");
+            Log.d(TAG, "SoLoader initialized successfully");
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "SoLoader native library loading failed: " + e.getMessage(), e);
+            throw e; // Re-throw — без SoLoader приложение не может работать
         } catch (Exception e) {
-            Log.e(TAG, "❌ Ошибка инициализации SoLoader: " + e.getMessage());
-            e.printStackTrace();
+            Log.e(TAG, "SoLoader init failed: " + e.getMessage(), e);
+            throw new RuntimeException("SoLoader initialization failed", e);
         }
 
         if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
