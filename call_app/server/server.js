@@ -25,6 +25,58 @@ const cors = require('cors');
 const compression = require('compression');
 const helmet = require('helmet');
 const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+
+// Настройка multer для загрузки APK
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+const apkStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadsDir),
+  filename: (req, file, cb) => {
+    // Удаляем старый APK перед сохранением нового
+    const files = fs.readdirSync(uploadsDir).filter(f => f.endsWith('.apk'));
+    files.forEach(f => fs.unlinkSync(path.join(uploadsDir, f)));
+    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, safeName);
+  }
+});
+
+const apkUpload = multer({
+  storage: apkStorage,
+  limits: { fileSize: 200 * 1024 * 1024 }, // 200 MB
+  fileFilter: (req, file, cb) => {
+    if (!file.originalname.toLowerCase().endsWith('.apk')) {
+      return cb(new Error('Только .apk файлы разрешены'));
+    }
+    cb(null, true);
+  }
+});
+
+// Метаданные текущего APK (хранятся в JSON файле)
+const apkMetaPath = path.join(uploadsDir, 'apk-meta.json');
+
+function getApkMeta() {
+  try {
+    if (fs.existsSync(apkMetaPath)) {
+      return JSON.parse(fs.readFileSync(apkMetaPath, 'utf8'));
+    }
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
+function saveApkMeta(meta) {
+  fs.writeFileSync(apkMetaPath, JSON.stringify(meta, null, 2));
+}
+
+function deleteApkMeta() {
+  if (fs.existsSync(apkMetaPath)) {
+    fs.unlinkSync(apkMetaPath);
+  }
+}
 
 // Подключение к базе данных
 const { connectDatabase, getDatabaseStats } = require('./config/database');
@@ -573,16 +625,36 @@ app.get('/', async (req, res) => {
             </div>
           </div>
           
-          <div class="download-section">
+          <div class="download-section" id="downloadSection">
             <div class="download-title">🎉 Скачай приложение!</div>
             <div class="download-subtitle">Доступно для Android устройств</div>
-            <a href="/download/SecureCall-v7.2.apk" class="download-button">
-              📱 Скачать для Android
-            </a>
-            <div style="margin-top: 20px; font-size: 14px; opacity: 0.8;">
-              Версия 7.2.1 • Размер ~25 МБ • Android 8.0+
-            </div>
+            <div id="downloadContent" style="opacity: 0.7;">Загрузка...</div>
           </div>
+
+          <script>
+            fetch('/admin/apk/info')
+              .then(r => r.json())
+              .then(data => {
+                const el = document.getElementById('downloadContent');
+                if (data.apk) {
+                  const sizeMB = (data.apk.size / 1024 / 1024).toFixed(1);
+                  const ver = data.apk.version ? 'v' + data.apk.version : '';
+                  el.innerHTML =
+                    '<a href="/download/app.apk" class="download-button">📱 Скачать для Android</a>' +
+                    '<div style="margin-top: 20px; font-size: 14px; opacity: 0.8;">' +
+                      (ver ? ver + ' • ' : '') + sizeMB + ' МБ • Android 8.0+' +
+                    '</div>';
+                  el.style.opacity = '1';
+                } else {
+                  el.innerHTML = '<div style="font-size: 16px; opacity: 0.8;">Приложение пока не доступно для скачивания</div>';
+                  el.style.opacity = '1';
+                }
+              })
+              .catch(() => {
+                document.getElementById('downloadContent').innerHTML =
+                  '<div style="font-size: 16px; opacity: 0.8;">Не удалось загрузить информацию</div>';
+              });
+          </script>
           
           <div class="footer">
             <p><strong>SecureCall Server v7.2.1 Full</strong></p>
@@ -917,6 +989,38 @@ app.get('/admin', (req, res) => {
               </div>
             </div>
             
+            <!-- APK УПРАВЛЕНИЕ -->
+            <div class="admin-card">
+              <h2 style="margin-bottom: 20px;">📦 Управление APK</h2>
+
+              <div id="apkMessage" class="hidden"></div>
+
+              <div id="apkInfo" style="margin-bottom: 20px; padding: 20px; background: #f5f5f5; border-radius: 12px;">
+                Загрузка информации...
+              </div>
+
+              <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: flex-end;">
+                <div style="flex: 1; min-width: 200px;">
+                  <label style="display: block; margin-bottom: 8px; font-weight: 600; color: #333;">APK файл:</label>
+                  <input type="file" id="apkFile" accept=".apk" style="width: 100%; padding: 10px; border: 2px solid #e0e0e0; border-radius: 10px; font-size: 14px;">
+                </div>
+                <div style="min-width: 150px;">
+                  <label style="display: block; margin-bottom: 8px; font-weight: 600; color: #333;">Версия:</label>
+                  <input type="text" id="apkVersion" placeholder="Напр. 7.2.1" style="width: 100%; padding: 10px 15px; border: 2px solid #e0e0e0; border-radius: 10px; font-size: 14px;">
+                </div>
+                <button onclick="uploadApk()" class="btn btn-primary" style="padding: 10px 25px; width: auto; white-space: nowrap;">
+                  📤 Загрузить APK
+                </button>
+              </div>
+
+              <div id="uploadProgress" class="hidden" style="margin-top: 15px;">
+                <div style="background: #e0e0e0; border-radius: 10px; overflow: hidden; height: 8px;">
+                  <div id="progressBar" style="width: 0%; height: 100%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); transition: width 0.3s;"></div>
+                </div>
+                <div id="progressText" style="text-align: center; margin-top: 5px; font-size: 13px; color: #666;">0%</div>
+              </div>
+            </div>
+
             <div class="admin-card">
               <h2 style="margin-bottom: 20px;">👥 Управление пользователями</h2>
               
@@ -971,6 +1075,7 @@ app.get('/admin', (req, res) => {
                 document.getElementById('loginSection').classList.add('hidden');
                 document.getElementById('adminPanel').classList.remove('hidden');
                 loadUsers();
+                loadApkInfo();
               } else {
                 errorDiv.textContent = data.message || 'Неверный пароль';
                 errorDiv.classList.remove('hidden');
@@ -1148,6 +1253,137 @@ app.get('/admin', (req, res) => {
             }, 3000);
           }
           
+          // ==================== APK ====================
+
+          async function loadApkInfo() {
+            try {
+              const response = await fetch('/admin/apk/info');
+              const data = await response.json();
+              const div = document.getElementById('apkInfo');
+
+              if (data.apk) {
+                const sizeMB = (data.apk.size / 1024 / 1024).toFixed(1);
+                const date = new Date(data.apk.uploadedAt).toLocaleString('ru-RU');
+                div.innerHTML = \`
+                  <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                    <div>
+                      <div style="font-weight: 700; font-size: 16px; color: #333;">📱 \${data.apk.originalName}</div>
+                      <div style="font-size: 13px; color: #666; margin-top: 5px;">
+                        Версия: <strong>\${data.apk.version || '—'}</strong> &nbsp;|&nbsp; Размер: <strong>\${sizeMB} МБ</strong> &nbsp;|&nbsp; Загружен: \${date}
+                      </div>
+                    </div>
+                    <button onclick="deleteApk()" class="btn-small btn-delete" style="padding: 8px 16px;">🗑️ Удалить APK</button>
+                  </div>
+                \`;
+              } else {
+                div.innerHTML = '<div style="text-align: center; color: #999;">APK файл не загружен</div>';
+              }
+            } catch (error) {
+              console.error('Ошибка загрузки APK info:', error);
+            }
+          }
+
+          async function uploadApk() {
+            const fileInput = document.getElementById('apkFile');
+            const versionInput = document.getElementById('apkVersion');
+
+            if (!fileInput.files.length) {
+              showApkMessage('Выберите APK файл', 'error');
+              return;
+            }
+
+            const file = fileInput.files[0];
+            if (!file.name.toLowerCase().endsWith('.apk')) {
+              showApkMessage('Только .apk файлы разрешены', 'error');
+              return;
+            }
+
+            const formData = new FormData();
+            formData.append('apk', file);
+            formData.append('version', versionInput.value);
+
+            const progressDiv = document.getElementById('uploadProgress');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            progressDiv.classList.remove('hidden');
+            progressBar.style.width = '0%';
+            progressText.textContent = '0%';
+
+            try {
+              const xhr = new XMLHttpRequest();
+              xhr.open('POST', '/admin/apk/upload');
+              xhr.setRequestHeader('X-Admin-Session', sessionId);
+
+              xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                  const pct = Math.round((e.loaded / e.total) * 100);
+                  progressBar.style.width = pct + '%';
+                  progressText.textContent = pct + '%';
+                }
+              };
+
+              xhr.onload = () => {
+                progressDiv.classList.add('hidden');
+                try {
+                  const data = JSON.parse(xhr.responseText);
+                  if (data.success) {
+                    showApkMessage('APK успешно загружен!', 'success');
+                    fileInput.value = '';
+                    versionInput.value = '';
+                    loadApkInfo();
+                  } else {
+                    showApkMessage(data.message || 'Ошибка загрузки', 'error');
+                  }
+                } catch (e) {
+                  showApkMessage('Ошибка обработки ответа сервера', 'error');
+                }
+              };
+
+              xhr.onerror = () => {
+                progressDiv.classList.add('hidden');
+                showApkMessage('Ошибка подключения к серверу', 'error');
+              };
+
+              xhr.send(formData);
+            } catch (error) {
+              progressDiv.classList.add('hidden');
+              showApkMessage('Ошибка загрузки', 'error');
+            }
+          }
+
+          async function deleteApk() {
+            if (!confirm('Удалить текущий APK файл?')) return;
+
+            try {
+              const response = await fetch('/admin/apk/delete', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Admin-Session': sessionId
+                }
+              });
+
+              const data = await response.json();
+              if (data.success) {
+                showApkMessage('APK удален', 'success');
+                loadApkInfo();
+              } else {
+                showApkMessage(data.message || 'Ошибка удаления', 'error');
+              }
+            } catch (error) {
+              showApkMessage('Ошибка подключения к серверу', 'error');
+            }
+          }
+
+          function showApkMessage(text, type) {
+            const div = document.getElementById('apkMessage');
+            div.textContent = text;
+            div.className = type === 'success' ? 'success-message' : 'error-message';
+            setTimeout(() => { div.classList.add('hidden'); }, 3000);
+          }
+
+          // ==================== /APK ====================
+
           // Выход
           function logout() {
             sessionId = null;
@@ -1336,6 +1572,97 @@ app.post('/admin/user/unban', async (req, res) => {
     console.error('[Admin] Ошибка разблокировки:', error);
     res.json({ success: false, message: 'Ошибка разблокировки' });
   }
+});
+
+// =============================================================================
+// APK UPLOAD / DOWNLOAD / DELETE
+// =============================================================================
+
+// Загрузка APK (только для авторизованного админа)
+app.post('/admin/apk/upload', (req, res) => {
+  const sessionId = req.headers['x-admin-session'];
+
+  if (!isValidAdminSession(sessionId)) {
+    return res.status(401).json({ success: false, message: 'Не авторизован' });
+  }
+
+  apkUpload.single('apk')(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.json({ success: false, message: 'Файл слишком большой (макс. 200 МБ)' });
+        }
+        return res.json({ success: false, message: `Ошибка загрузки: ${err.message}` });
+      }
+      return res.json({ success: false, message: err.message });
+    }
+
+    if (!req.file) {
+      return res.json({ success: false, message: 'Файл не выбран' });
+    }
+
+    const version = req.body.version || '';
+    const meta = {
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      size: req.file.size,
+      version: version,
+      uploadedAt: new Date().toISOString(),
+    };
+    saveApkMeta(meta);
+
+    console.log(`[Admin] 📦 APK загружен: ${req.file.originalname} (${(req.file.size / 1024 / 1024).toFixed(1)} МБ)`);
+
+    res.json({ success: true, meta });
+  });
+});
+
+// Получить информацию о текущем APK
+app.get('/admin/apk/info', (req, res) => {
+  const meta = getApkMeta();
+  if (!meta) {
+    return res.json({ success: true, apk: null });
+  }
+  res.json({ success: true, apk: meta });
+});
+
+// Удалить текущий APK (только админ)
+app.post('/admin/apk/delete', (req, res) => {
+  const sessionId = req.headers['x-admin-session'];
+
+  if (!isValidAdminSession(sessionId)) {
+    return res.status(401).json({ success: false, message: 'Не авторизован' });
+  }
+
+  const meta = getApkMeta();
+  if (!meta) {
+    return res.json({ success: false, message: 'APK не найден' });
+  }
+
+  const filePath = path.join(uploadsDir, meta.filename);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+  deleteApkMeta();
+
+  console.log('[Admin] 🗑️ APK удален');
+
+  res.json({ success: true });
+});
+
+// Скачивание APK (публичный доступ)
+app.get('/download/app.apk', (req, res) => {
+  const meta = getApkMeta();
+  if (!meta) {
+    return res.status(404).send('APK файл не найден');
+  }
+
+  const filePath = path.join(uploadsDir, meta.filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send('APK файл не найден');
+  }
+
+  res.download(filePath, meta.originalName);
 });
 
 // =============================================================================
