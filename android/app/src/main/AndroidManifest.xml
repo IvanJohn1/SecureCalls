@@ -64,11 +64,16 @@
         android:hardwareAccelerated="true"
         android:supportsRtl="true"
         android:requestLegacyExternalStorage="true"
+        android:extractNativeLibs="true"
         tools:targetApi="35">
-        
-        <!-- ВИДАЛЕНО: android:extractNativeLibs="true" -->
-        <!-- AGP 8.5.2+ автоматично керує packaging нативних бібліотек -->
-        <!-- Для Android 15 бібліотеки будуть несжатыми (uncompressed) за замовчуванням -->
+
+        <!-- КРИТИЧНО ДЛЯ ANDROID 15 (16KB PAGE SIZE):
+             extractNativeLibs="true" заставляет систему извлекать .so файлы
+             из APK на диск при установке. При извлечении система выравнивает
+             файлы по текущему размеру страницы (16KB на Android 15), что
+             обходит SIGSEGV (SEGV_ACCERR) в ElfReader::LoadSegments,
+             возникающий при прямом mmap из APK для .so с p_align=4096.
+             Побочный эффект: +10-15% к размеру установки (сжатые .so в APK). -->
         
         <activity
             android:name=".MainActivity"
