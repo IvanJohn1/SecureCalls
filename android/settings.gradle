@@ -16,7 +16,7 @@ pluginManagement {
 //   3) Некоторые RN native модули не находят свои репозитории
 //
 // Все репозитории определены в build.gradle → allprojects { repositories }
-// Это стандартный паттерн React Native 0.73.x
+// Это стандартный паттерн React Native 0.73.x–0.76.x
 // ═══════════════════════════════════════════════════════════
 
 rootProject.name = 'SecureCallApp'

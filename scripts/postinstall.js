@@ -27,6 +27,24 @@ const path = require('path');
 const REANIMATED = path.join(__dirname, '..', 'node_modules', 'react-native-reanimated');
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Version check: patches only needed for reanimated ≤ 3.8.x (NDK r27 compat)
+// Reanimated ≥ 3.16 already includes these fixes upstream.
+// ─────────────────────────────────────────────────────────────────────────────
+try {
+  const pkg = JSON.parse(fs.readFileSync(path.join(REANIMATED, 'package.json'), 'utf8'));
+  const major = parseInt(pkg.version.split('.')[0], 10);
+  const minor = parseInt(pkg.version.split('.')[1], 10);
+  if (major > 3 || (major === 3 && minor >= 16)) {
+    console.log(`[postinstall] react-native-reanimated ${pkg.version} — NDK r27 patches not needed (fixed upstream)`);
+    process.exit(0);
+  }
+  console.log(`[postinstall] react-native-reanimated ${pkg.version} — applying NDK r27 patches`);
+} catch (e) {
+  console.log('[postinstall] react-native-reanimated not found — skip all patches');
+  process.exit(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helper
 // ─────────────────────────────────────────────────────────────────────────────
 function patch(relPath, label, transformFn) {
