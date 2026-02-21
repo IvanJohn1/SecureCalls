@@ -59,19 +59,33 @@ android {
         applicationId "com.securecallapp"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        
+
         // Обновленные версии из твоего запроса
         versionCode 11
         versionName "11.0"
-        
+
         multiDexEnabled true // Важно для предотвращения крашей на Xiaomi при старте
 
         buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", isNewArchitectureEnabled().toString()
         buildConfigField "boolean", "IS_HERMES_ENABLED", (findProperty('hermesEnabled')?.toBoolean() ?: true).toString()
-        
+
         // ═══════════════════════════════════════════════════════════
         // ИСПРАВЛЕНО: Убраны ndk.abiFilters - используем только splits.abi
         // ═══════════════════════════════════════════════════════════
+
+        // ═══════════════════════════════════════════════════════════
+        // 16KB PAGE SIZE: Флаг выравнивания для собственных нативных
+        // библиотек (C++). Гарантирует, что все кастомные .so собираются
+        // с p_align=16384 (16KB), совместимым с Android 15 эмуляторами
+        // и устройствами с 16KB page size.
+        // Примечание: НЕ влияет на прекомпилированные .so из node_modules
+        // (libhermes.so, libwebrtc.so) — они исправляются обновлением RN.
+        // ═══════════════════════════════════════════════════════════
+        externalNativeBuild {
+            cmake {
+                cppFlags "-Wl,-z,max-page-size=16384"
+            }
+        }
     }
 
     signingConfigs {
@@ -138,16 +152,20 @@ android {
 
     packaging {
         // ═══════════════════════════════════════════════════════════
-        // КРИТИЧНО ДЛЯ ANDROID 15 (16KB PAGE SIZE):
-        // useLegacyPackaging = true заставляет AGP упаковывать .so файлы
-        // в сжатом виде. При установке система ИЗВЛЕКАЕТ их на диск
-        // и выравнивает по границе страницы (16KB). Это обходит
-        // SIGSEGV (SEGV_ACCERR) в ElfReader::LoadSegments, вызванный
-        // тем, что ELF-сегменты в .so имеют p_align=4096 (4KB),
-        // несовместимый с 16KB page size при прямом mmap из APK.
+        // 16KB PAGE SIZE — РЕШЕНО ОБНОВЛЕНИЕМ RN ДО 0.76:
+        // С RN 0.76 все .so (libhermes.so, libreactnativejni.so и др.)
+        // собраны с p_align=16384 (16KB). AGP 8.5.2 корректно
+        // выравнивает uncompressed .so внутри APK/AAB.
+        //
+        // useLegacyPackaging = false: .so хранятся в APK без сжатия
+        // и загружаются через mmap напрямую. Не нужно извлекать на диск.
+        // Преимущества: меньший размер установки, быстрый cold start.
+        //
+        // ВАЖНО: НЕ ставить true — иначе система может загрузить .so
+        // прямо из zip (base.apk!/lib/...) с неправильным выравниванием.
         // ═══════════════════════════════════════════════════════════
         jniLibs {
-            useLegacyPackaging = true
+            useLegacyPackaging = false
 
             pickFirsts += [
                 '**/libc++_shared.so',
