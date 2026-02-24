@@ -250,6 +250,44 @@ export default function LoginScreen({navigation}) {
   };
 
   /**
+   * Battery optimization check — critical for Samsung and other OEMs
+   * that aggressively kill background services.
+   */
+  const checkBatteryOptimization = async () => {
+    if (Platform.OS !== 'android') return;
+
+    const alreadyPrompted = await AsyncStorage.getItem('battery_opt_prompted');
+    if (alreadyPrompted) return;
+
+    // Listen for the event from native side
+    const {DeviceEventEmitter} = require('react-native');
+    const sub = DeviceEventEmitter.addListener('batteryOptimizationEnabled', () => {
+      sub.remove();
+      AsyncStorage.setItem('battery_opt_prompted', 'true');
+
+      Alert.alert(
+        'Оптимизация батареи',
+        'Для надёжного получения входящих звонков при закрытом приложении ' +
+        'рекомендуется отключить оптимизацию батареи для SecureCall.\n\n' +
+        'Настройки → Приложения → SecureCall → Батарея → Без ограничений',
+        [
+          {
+            text: 'Открыть настройки',
+            onPress: () => Linking.openSettings(),
+          },
+          {
+            text: 'Позже',
+            style: 'cancel',
+          },
+        ],
+      );
+    });
+
+    // Clean up after 10s if no event comes
+    setTimeout(() => sub.remove(), 10000);
+  };
+
+  /**
    * Проверка автоматического входа
    */
   const checkAutoLogin = async () => {
@@ -259,6 +297,9 @@ export default function LoginScreen({navigation}) {
 
       // Проверка MIUI-специфичных настроек (только для Xiaomi)
       checkAndPromptMiuiAutostart();
+
+      // Battery optimization check for Samsung and other OEMs
+      checkBatteryOptimization();
 
       const savedUsername = await AsyncStorage.getItem('username');
       const savedToken = await AsyncStorage.getItem('token');

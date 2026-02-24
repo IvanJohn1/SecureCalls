@@ -34,6 +34,7 @@ export default function IncomingCallScreen({route, navigation}) {
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [receivedOffer, setReceivedOffer] = useState(null);
+  const [connectionStatus, setConnectionStatus] = useState(null);
 
   const isMountedRef = useRef(true);
   const scaleAnim = useRef(new Animated.Value(0)).current;
@@ -116,7 +117,7 @@ export default function IncomingCallScreen({route, navigation}) {
   };
 
   /**
-   * Принять звонок
+   * Принять звонок — with socket readiness check
    */
   const handleAccept = async () => {
     if (isProcessing) return;
@@ -131,8 +132,30 @@ export default function IncomingCallScreen({route, navigation}) {
       // Отменить уведомления
       await NotificationService.cancelAllNotifications();
 
+      // Wait for socket to be ready if not already connected
+      if (!SocketService.isConnected()) {
+        setConnectionStatus('Подключение...');
+        try {
+          await SocketService.waitForAuthentication(12000);
+          if (isMountedRef.current) setConnectionStatus(null);
+        } catch (e) {
+          console.warn('[IncomingCallScreen] Socket not ready:', e.message);
+          if (isMountedRef.current) {
+            setConnectionStatus('Нет соединения');
+            setIsProcessing(false);
+          }
+          return;
+        }
+      }
+
       // [FIX v11.0] Передаём callId — сервер отменит missed_call таймер
-      SocketService.acceptCall(from, callId);
+      const accepted = SocketService.acceptCall(from, callId);
+      if (!accepted) {
+        console.warn('[IncomingCallScreen] acceptCall returned false');
+        setConnectionStatus('Ошибка соединения');
+        setIsProcessing(false);
+        return;
+      }
 
       // Перейти на CallScreen с offer (если был получен) и callId
       navigation.replace('Call', {
@@ -199,8 +222,15 @@ export default function IncomingCallScreen({route, navigation}) {
           {isVideo ? '📹 Видеозвонок' : '📞 Аудиозвонок'}
         </Text>
 
+        {/* Connection status indicator */}
+        {connectionStatus && (
+          <View style={[styles.offerIndicator, {borderColor: 'rgba(255,152,0,0.5)', backgroundColor: 'rgba(255,152,0,0.2)'}]}>
+            <Text style={[styles.offerIndicatorText, {color: '#FF9800'}]}>{connectionStatus}</Text>
+          </View>
+        )}
+
         {/* Индикатор offer */}
-        {receivedOffer && (
+        {receivedOffer && !connectionStatus && (
           <View style={styles.offerIndicator}>
             <Text style={styles.offerIndicatorText}>✓ Готов к соединению</Text>
           </View>

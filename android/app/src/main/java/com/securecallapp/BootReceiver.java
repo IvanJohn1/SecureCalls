@@ -33,18 +33,22 @@ public class BootReceiver extends BroadcastReceiver {
             "android.intent.action.QUICKBOOT_POWERON".equals(action) ||
             "com.htc.intent.action.QUICKBOOT_POWERON".equals(action)) {
             
-            // Проверить, есть ли сохраненные данные авторизации
+            // Read credentials from native SharedPreferences (written by NativeStorageModule)
             SharedPreferences prefs = context.getSharedPreferences(
-                "RCTAsyncLocalStorage_SecureCall", 
+                NativeStorageModule.PREFS_NAME,
                 Context.MODE_PRIVATE
             );
-            
+
             String username = prefs.getString("username", null);
             String token = prefs.getString("token", null);
-            
+            String fcmToken = prefs.getString("fcm_token", null);
+
+            Log.d(TAG, "username found: " + (username != null));
+            Log.d(TAG, "token found: " + (token != null));
+            Log.d(TAG, "fcm_token found: " + (fcmToken != null));
+
             if (username != null && token != null) {
                 Log.d(TAG, "✅ Найдены данные авторизации");
-                Log.d(TAG, "👤 Пользователь: " + username);
                 Log.d(TAG, "🚀 Запуск Foreground Service...");
                 
                 try {

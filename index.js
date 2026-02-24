@@ -14,6 +14,9 @@ import notifee, {AndroidImportance, AndroidCategory, EventType} from '@notifee/r
 import App from './App';
 import {name as appName} from './app.json';
 
+// Register Headless JS Task for incoming calls when app is killed
+import './src/IncomingCallHeadlessTask';
+
 console.log('╔════════════════════════════════════════╗');
 console.log('║  INDEX.JS v3.0 - ФИНАЛ                ║');
 console.log('╚════════════════════════════════════════╝');
