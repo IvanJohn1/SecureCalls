@@ -36,6 +36,7 @@ export default function HomeScreen({route, navigation}) {
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
 
   const isLoggingOut = useRef(false);
+  const isMountedRef = useRef(true);
   const appState = useRef(AppState.currentState);
 
   useEffect(() => {
@@ -56,6 +57,7 @@ export default function HomeScreen({route, navigation}) {
     const subscription = AppState.addEventListener('change', handleAppStateChange);
 
     return () => {
+      isMountedRef.current = false;
       cleanupSocketListeners();
       cleanupDeviceEventListeners();
       subscription.remove();
@@ -165,13 +167,15 @@ export default function HomeScreen({route, navigation}) {
   };
 
   const handleUsersList = usersList => {
-    console.log('[HomeScreen] 👥 Список пользователей:', usersList.length);
+    if (!isMountedRef.current) return;
+    console.log('[HomeScreen] Users list:', usersList.length);
     setUsers(usersList);
     setIsLoading(false);
   };
 
   const handleUserOnline = data => {
-    console.log('[HomeScreen] 🟢 Пользователь онлайн:', data.username);
+    if (!isMountedRef.current) return;
+    console.log('[HomeScreen] User online:', data.username);
     setUsers(prevUsers =>
       prevUsers.map(user =>
         user.username === data.username ? {...user, isOnline: true} : user,
@@ -180,7 +184,8 @@ export default function HomeScreen({route, navigation}) {
   };
 
   const handleUserOffline = data => {
-    console.log('[HomeScreen] 🔴 Пользователь оффлайн:', data.username);
+    if (!isMountedRef.current) return;
+    console.log('[HomeScreen] User offline:', data.username);
     setUsers(prevUsers =>
       prevUsers.map(user =>
         user.username === data.username ? {...user, isOnline: false} : user,
@@ -213,23 +218,26 @@ export default function HomeScreen({route, navigation}) {
   };
 
   const handleDisconnect = () => {
+    if (!isMountedRef.current) return;
     if (isLoggingOut.current) {
-      console.log('[HomeScreen] Выход - игнорируем disconnect');
+      console.log('[HomeScreen] Logging out - ignoring disconnect');
       return;
     }
 
-    console.log('[HomeScreen] 🔌 Потеряно соединение');
+    console.log('[HomeScreen] Connection lost');
     setConnectionStatus('disconnected');
   };
 
   const handleReconnecting = attempt => {
-    console.log('[HomeScreen] 🔄 Переподключение, попытка:', attempt);
+    if (!isMountedRef.current) return;
+    console.log('[HomeScreen] Reconnecting, attempt:', attempt);
     setConnectionStatus('reconnecting');
     setReconnectAttempts(attempt);
   };
 
   const handleReconnect = () => {
-    console.log('[HomeScreen] ✅ Переподключено');
+    if (!isMountedRef.current) return;
+    console.log('[HomeScreen] Reconnected');
     setConnectionStatus('connected');
     setReconnectAttempts(0);
     SocketService.getUsers(true);

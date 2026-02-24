@@ -75,44 +75,44 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
 
       console.log('[FCM BG] Канал создан:', channelId);
 
-      // 2. Показать notification
+      // 2. Show notification with callId for proper accept/reject
       await notifee.displayNotification({
         id: `call-${data.from}-${Date.now()}`,
-        title: data.isVideo === 'true' 
-          ? '📹 Входящий видеозвонок' 
-          : '📞 Входящий звонок',
+        title: data.isVideo === 'true'
+          ? 'Входящий видеозвонок'
+          : 'Входящий звонок',
         body: `${data.from} звонит вам`,
         android: {
           channelId: 'incoming-calls',
           importance: AndroidImportance.HIGH,
-          
-          // КРИТИЧНО: Full Screen Intent
+
+          // Full Screen Intent — opens IncomingCallScreen over lock screen
           fullScreenAction: {
-            id: 'default',
+            id: 'incoming_call',
             launchActivity: 'default',
           },
-          
+
           pressAction: {
             id: 'default',
             launchActivity: 'default',
           },
-          
+
           actions: [
             {
-              title: '✓ Ответить',
+              title: 'Ответить',
               pressAction: {
                 id: 'answer',
                 launchActivity: 'default',
               },
             },
             {
-              title: '✕ Отклонить',
+              title: 'Отклонить',
               pressAction: {
                 id: 'reject',
               },
             },
           ],
-          
+
           ongoing: true,
           autoCancel: false,
           category: AndroidCategory.CALL,
@@ -125,6 +125,7 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
           type: 'incoming_call',
           from: data.from,
           isVideo: data.isVideo || 'false',
+          callId: data.callId || '',
         },
       });
 

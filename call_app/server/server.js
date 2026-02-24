@@ -1732,7 +1732,7 @@ io.on('connection', (socket) => {
         });
       }
       
-      await disconnectPreviousSession(username);
+      await disconnectPreviousSession(username, socket.id);
       await User.setOnlineStatus(username, true);
 
       activeSessions.set(socket.id, {
@@ -1770,7 +1770,7 @@ io.on('connection', (socket) => {
         });
       }
       
-      await disconnectPreviousSession(username);
+      await disconnectPreviousSession(username, socket.id);
       await User.setOnlineStatus(username, true);
 
       activeSessions.set(socket.id, {
@@ -1946,7 +1946,8 @@ io.on('connection', (socket) => {
           const pushResult = await firebaseService.sendIncomingCallPush(
             targetUser.fcmToken,
             session.username,
-            isVideo
+            isVideo,
+            callId
           );
           
           if (pushResult) {
@@ -2433,21 +2434,28 @@ function generateCallId() {
   return `call_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`;
 }
 
-async function disconnectPreviousSession(username) {
+async function disconnectPreviousSession(username, currentSocketId) {
   const existingSocketId = onlineUsers.get(username);
-  
-  if (existingSocketId) {
+
+  if (existingSocketId && existingSocketId !== currentSocketId) {
     const existingSocket = io.sockets.sockets.get(existingSocketId);
-    
+
     if (existingSocket) {
+      console.log(`[Server] Отключаем старую сессию ${existingSocketId} для ${username} (новая: ${currentSocketId})`);
       existingSocket.emit('force_disconnect', {
         message: 'Вход выполнен с другого устройства'
       });
-      existingSocket.disconnect();
+      // Delay disconnect to allow force_disconnect to be delivered
+      setTimeout(() => {
+        try { existingSocket.disconnect(); } catch (e) { /* ignore */ }
+      }, 500);
     }
-    
-    onlineUsers.delete(username);
+
     activeSessions.delete(existingSocketId);
+  }
+  // Always clean up onlineUsers — it will be re-set by the caller
+  if (existingSocketId) {
+    onlineUsers.delete(username);
   }
 }
 

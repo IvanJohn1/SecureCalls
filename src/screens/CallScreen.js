@@ -186,13 +186,14 @@ export default function CallScreen({route, navigation}) {
    */
   const handleCallTimeout = data => {
     if (!isMountedRef.current) return;
-    console.log('CallScreen v11.0: ⏰ Таймаут от сервера');
-    // Отменяем клиентский таймаут чтобы не было двойного Alert
+    console.log('CallScreen: Timeout from server');
+    // Cancel client timeout to avoid double Alert
     if (callTimeoutRef.current) {
       clearTimeout(callTimeoutRef.current);
       callTimeoutRef.current = null;
     }
     if (!isCleanedUpRef.current) {
+      setCallState('timeout');
       Alert.alert('Нет ответа', 'Собеседник не отвечает', [
         {text: 'OK', onPress: () => { cleanup(); navigation.goBack(); }},
       ]);
@@ -346,9 +347,21 @@ export default function CallScreen({route, navigation}) {
     if (!isMountedRef.current) return;
     console.log('→ Connection состояние:', state);
 
+    if (state === 'connecting') {
+      if (callState !== 'connected') {
+        setCallState('connecting');
+      }
+    }
+
     if (state === 'connected' && callState !== 'connected') {
-      // P2P соединение установлено
-      console.log('✓ P2P connected');
+      console.log('P2P connected');
+      setCallState('connected');
+      // Clear timeout
+      if (callTimeoutRef.current) {
+        clearTimeout(callTimeoutRef.current);
+        callTimeoutRef.current = null;
+      }
+      startCallTimer();
     }
 
     if (state === 'disconnected' || state === 'failed') {
@@ -468,8 +481,10 @@ export default function CallScreen({route, navigation}) {
     cleanupListeners();
     WebRTCService.cleanup();
 
-    setLocalStream(null);
-    setRemoteStream(null);
+    if (isMountedRef.current) {
+      setLocalStream(null);
+      setRemoteStream(null);
+    }
   };
 
   // ═══════════════════════════════════════
@@ -516,6 +531,8 @@ export default function CallScreen({route, navigation}) {
         return 'Соединение...';
       case 'connected':
         return formatDuration(callDuration);
+      case 'timeout':
+        return 'Нет ответа';
       default:
         return '';
     }
@@ -523,6 +540,7 @@ export default function CallScreen({route, navigation}) {
 
   return (
     <View style={styles.container}>
+      {/* StatusBar wrapped - safe even when activity is null */}
       <StatusBar barStyle="light-content" backgroundColor="#000" />
 
       {/* Удалённое видео */}

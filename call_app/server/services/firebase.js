@@ -88,7 +88,7 @@ class FirebaseService {
    * 
    * ⚠️ КРИТИЧНО: android.notification ОБЯЗАТЕЛЕН для full-screen!
    */
-  async sendIncomingCallPush(fcmToken, fromUsername, isVideo) {
+  async sendIncomingCallPush(fcmToken, fromUsername, isVideo, callId) {
     if (!this.isReady()) {
       console.warn('[Firebase] ⚠️ Сервис не готов, push не отправлен');
       return null;
@@ -125,6 +125,7 @@ class FirebaseService {
           type: 'incoming_call',
           from: fromUsername,
           isVideo: isVideo.toString(),
+          callId: callId || '',
           timestamp: Date.now().toString(),
           priority: 'high',
           sound: 'default',
