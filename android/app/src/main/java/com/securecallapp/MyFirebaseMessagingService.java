@@ -110,12 +110,14 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     private void handleIncomingCall(Map<String, String> data) {
         String from = data.get("from");
         String isVideoStr = data.get("isVideo");
+        String callId = data.get("callId");
         boolean isVideo = "true".equals(isVideoStr);
 
         Log.d(TAG, "========================================");
         Log.d(TAG, "📞 ВХОДЯЩИЙ ЗВОНОК");
         Log.d(TAG, "От: " + from);
         Log.d(TAG, "Видео: " + isVideo);
+        Log.d(TAG, "CallId: " + callId);
         Log.d(TAG, "========================================");
 
         if (from == null || from.isEmpty()) {
@@ -136,6 +138,9 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         intent.putExtra("type", "incoming_call");
         intent.putExtra("from", from);
         intent.putExtra("isVideo", String.valueOf(isVideo));
+        if (callId != null) {
+            intent.putExtra("callId", callId);
+        }
 
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 this,
@@ -152,6 +157,9 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         fullScreenIntent.putExtra("type", "incoming_call");
         fullScreenIntent.putExtra("from", from);
         fullScreenIntent.putExtra("isVideo", String.valueOf(isVideo));
+        if (callId != null) {
+            fullScreenIntent.putExtra("callId", callId);
+        }
 
         PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
                 this,

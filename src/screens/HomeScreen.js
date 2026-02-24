@@ -95,12 +95,13 @@ export default function HomeScreen({route, navigation}) {
 
   const handleIncomingCallFromIntent = (data) => {
     console.log('[HomeScreen] 📞 Входящий звонок от Intent:', data);
-    
+
     if (data && data.from) {
       navigation.navigate('IncomingCall', {
         from: data.from,
         isVideo: data.isVideo || false,
         username: username,
+        callId: data.callId || null,
       });
     }
   };

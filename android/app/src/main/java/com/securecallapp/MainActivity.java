@@ -19,6 +19,7 @@ public class MainActivity extends ReactActivity {
 
     private String pendingCallFrom = null;
     private boolean pendingCallIsVideo = false;
+    private String pendingCallId = null;
     private boolean hasPendingCall = false;
 
     @Override
@@ -86,19 +87,20 @@ public class MainActivity extends ReactActivity {
         String type = extras.getString("type");
         String from = extras.getString("from");
         String isVideoStr = extras.getString("isVideo");
+        String callId = extras.getString("callId");
 
         // ИСПРАВЛЕНО: Убран мусорный текст "for (String key : bundle.keySet()) {"
         if ("incoming_call".equals(type) && from != null && !from.isEmpty()) {
             boolean isVideo = "true".equals(isVideoStr);
 
-            Log.d(TAG, "📞 ВХОДЯЩИЙ ЗВОНОК от: " + from + " (Video: " + isVideo + ")");
-            sendIncomingCallEvent(from, isVideo);
+            Log.d(TAG, "📞 ВХОДЯЩИЙ ЗВОНОК от: " + from + " (Video: " + isVideo + ", callId: " + callId + ")");
+            sendIncomingCallEvent(from, isVideo, callId);
         } else if ("message".equals(type) && from != null) {
             Log.d(TAG, "💬 НОВОЕ СООБЩЕНИЕ от: " + from);
         }
     }
 
-    private void sendIncomingCallEvent(String from, boolean isVideo) {
+    private void sendIncomingCallEvent(String from, boolean isVideo, String callId) {
         try {
             ReactContext reactContext = getReactNativeHost()
                     .getReactInstanceManager()
@@ -109,6 +111,9 @@ public class MainActivity extends ReactActivity {
                 WritableMap params = Arguments.createMap();
                 params.putString("from", from);
                 params.putBoolean("isVideo", isVideo);
+                if (callId != null) {
+                    params.putString("callId", callId);
+                }
 
                 reactContext
                         .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
@@ -120,12 +125,14 @@ public class MainActivity extends ReactActivity {
                 Log.w(TAG, "⚠️ ReactContext не готов, сохраняем в pending");
                 pendingCallFrom = from;
                 pendingCallIsVideo = isVideo;
+                pendingCallId = callId;
                 hasPendingCall = true;
             }
         } catch (Exception e) {
             Log.e(TAG, "❌ Ошибка отправки: " + e.getMessage());
             pendingCallFrom = from;
             pendingCallIsVideo = isVideo;
+            pendingCallId = callId;
             hasPendingCall = true;
         }
     }
@@ -134,11 +141,12 @@ public class MainActivity extends ReactActivity {
     protected void onResume() {
         super.onResume();
         if (hasPendingCall && pendingCallFrom != null) {
+            // [FIX] Increased delay to 2500ms to give auto-login time to complete
             getWindow().getDecorView().postDelayed(() -> {
                 if (hasPendingCall) {
-                    sendIncomingCallEvent(pendingCallFrom, pendingCallIsVideo);
+                    sendIncomingCallEvent(pendingCallFrom, pendingCallIsVideo, pendingCallId);
                 }
-            }, 1500);
+            }, 2500);
         }
     }
 
