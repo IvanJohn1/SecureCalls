@@ -1,7 +1,9 @@
 import io from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {SERVER_URL} from '../config/server.config';
-import {AppState} from 'react-native';
+import {AppState, NativeModules} from 'react-native';
+
+const {NativeStorage} = NativeModules;
 
 /**
  * ═══════════════════════════════════════════════════════════
@@ -415,6 +417,15 @@ class SocketService {
         await AsyncStorage.setItem('username', data.username);
         await AsyncStorage.setItem('token', data.token);
 
+        // Duplicate to native SharedPreferences for BootReceiver
+        if (NativeStorage) {
+          try {
+            await NativeStorage.saveCredentials(data.username, data.token);
+          } catch (e) {
+            console.warn('[SocketService] NativeStorage save failed:', e.message);
+          }
+        }
+
         console.log('[SocketService] Registration successful');
         resolve(data);
       });
@@ -447,6 +458,15 @@ class SocketService {
 
         await AsyncStorage.setItem('username', data.username);
         await AsyncStorage.setItem('token', data.token);
+
+        // Duplicate to native SharedPreferences for BootReceiver
+        if (NativeStorage) {
+          try {
+            await NativeStorage.saveCredentials(data.username, data.token);
+          } catch (e) {
+            console.warn('[SocketService] NativeStorage save failed:', e.message);
+          }
+        }
 
         console.log('[SocketService] Login successful');
         resolve(data);
@@ -535,6 +555,13 @@ class SocketService {
         this.shouldAutoReconnect = true;
         this._setState(STATE.AUTHENTICATED);
 
+        // Flush pending FCM token if any
+        if (this._pendingFcmToken) {
+          this.socket.emit('register_fcm_token', this._pendingFcmToken);
+          console.log('[SocketService] Deferred FCM token sent');
+          this._pendingFcmToken = null;
+        }
+
         console.log('[SocketService] Token auth successful');
         resolve(data);
       });
@@ -556,8 +583,17 @@ class SocketService {
     if (this.socket?.connected) {
       console.log('[SocketService] Registering FCM token');
       this.socket.emit('register_fcm_token', {username, fcmToken, platform});
+      this._pendingFcmToken = null;
     } else {
-      console.warn('[SocketService] Not connected - FCM token not registered');
+      console.warn('[SocketService] Not connected - FCM token deferred');
+      this._pendingFcmToken = {username, fcmToken, platform};
+    }
+
+    // Also save to native SharedPreferences for BootReceiver / token refresh
+    if (NativeStorage && fcmToken) {
+      NativeStorage.saveFcmToken(fcmToken).catch(e =>
+        console.warn('[SocketService] NativeStorage FCM save failed:', e.message)
+      );
     }
   }
 
@@ -571,6 +607,13 @@ class SocketService {
     this.savedToken = null;
     this.isAuthenticating = false;
     this._setState(STATE.DISCONNECTED);
+
+    // Clear native SharedPreferences
+    if (NativeStorage) {
+      NativeStorage.clearCredentials().catch(e =>
+        console.warn('[SocketService] NativeStorage clear failed:', e.message)
+      );
+    }
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -789,6 +832,14 @@ class SocketService {
     this.listeners.get(event).push(callback);
   }
 
+  once(event, callback) {
+    const wrapper = (data) => {
+      this.off(event, wrapper);
+      callback(data);
+    };
+    this.on(event, wrapper);
+  }
+
   off(event, callback) {
     if (!this.listeners.has(event)) return;
     const callbacks = this.listeners.get(event);
@@ -806,6 +857,35 @@ class SocketService {
       } catch (error) {
         console.error(`[SocketService] Error in handler ${event}:`, error);
       }
+    });
+  }
+
+  /**
+   * Wait for the socket to reach AUTHENTICATED state.
+   * Resolves immediately if already authenticated.
+   * Rejects on timeout.
+   */
+  waitForAuthentication(timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+      if (this.connectionState === STATE.AUTHENTICATED) {
+        resolve();
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        this.off('connection_state', onState);
+        reject(new Error('Timeout waiting for authentication'));
+      }, timeoutMs);
+
+      const onState = (state) => {
+        if (state === STATE.AUTHENTICATED) {
+          clearTimeout(timer);
+          this.off('connection_state', onState);
+          resolve();
+        }
+      };
+
+      this.on('connection_state', onState);
     });
   }
 

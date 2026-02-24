@@ -37,6 +37,9 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     private static final String CHANNEL_ID_MESSAGES = "messages";
     private static final String CHANNEL_ID_MISSED = "missed_calls";
 
+    // Static to survive service recreation; prevents WakeLock leaks on repeated calls
+    private static PowerManager.WakeLock sIncomingCallWakeLock;
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -195,6 +198,23 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             notificationManager.notify(9999, builder.build());
             Log.d(TAG, "✅ Notification о входящем звонке показан");
         }
+
+        // Launch Headless JS Task to pre-connect socket in the background
+        try {
+            Intent taskIntent = new Intent(this, IncomingCallTaskService.class);
+            taskIntent.putExtra("from", from);
+            taskIntent.putExtra("callId", callId != null ? callId : "");
+            taskIntent.putExtra("isVideo", isVideo);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(taskIntent);
+            } else {
+                startService(taskIntent);
+            }
+            Log.d(TAG, "✅ IncomingCallTaskService started");
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Error starting IncomingCallTaskService: " + e.getMessage());
+        }
     }
 
     /**
@@ -313,17 +333,24 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
      */
     private void wakeScreen() {
         try {
-            PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
-            if (powerManager != null) {
-                PowerManager.WakeLock wakeLock = powerManager.newWakeLock(
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null) return;
+
+            synchronized (MyFirebaseMessagingService.class) {
+                // Release previous WakeLock if still held (prevents leak on FCM retries)
+                if (sIncomingCallWakeLock != null && sIncomingCallWakeLock.isHeld()) {
+                    sIncomingCallWakeLock.release();
+                }
+                sIncomingCallWakeLock = pm.newWakeLock(
                         PowerManager.PARTIAL_WAKE_LOCK,
                         "SecureCall::IncomingCallWake"
                 );
-                wakeLock.acquire(10_000L); // 10 секунд — CPU не спит пока FCM обрабатывается
-                Log.d(TAG, "✅ CPU WakeLock активирован (экран разбудит fullScreenIntent)");
+                // 30s — enough for HeadlessTask startup + app opening
+                sIncomingCallWakeLock.acquire(30_000L);
             }
+            Log.d(TAG, "✅ WakeLock activated (30s)");
         } catch (Exception e) {
-            Log.e(TAG, "❌ Ошибка WakeLock: " + e.getMessage());
+            Log.e(TAG, "❌ WakeLock error: " + e.getMessage());
         }
     }
 

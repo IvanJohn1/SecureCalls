@@ -58,15 +58,28 @@ public class ConnectionServiceModule extends ReactContextBaseJavaModule {
     }
 
     /**
-     * Проверить, запущен ли сервис
+     * Проверить, запущен ли сервис — реальная проверка через ActivityManager
      */
     @ReactMethod
+    @SuppressWarnings("deprecation")
     public void isRunning(Promise promise) {
         try {
-            // В Android сложно проверить запущен ли конкретный сервис
-            // Для простоты всегда возвращаем true после запуска
-            promise.resolve(true);
+            android.app.ActivityManager manager = (android.app.ActivityManager)
+                reactContext.getSystemService(android.content.Context.ACTIVITY_SERVICE);
+
+            if (manager != null) {
+                for (android.app.ActivityManager.RunningServiceInfo info :
+                        manager.getRunningServices(Integer.MAX_VALUE)) {
+                    if (ConnectionForegroundService.class.getName()
+                            .equals(info.service.getClassName())) {
+                        promise.resolve(true);
+                        return;
+                    }
+                }
+            }
+            promise.resolve(false);
         } catch (Exception e) {
+            Log.e(TAG, "Error checking service status: " + e.getMessage());
             promise.reject("CHECK_ERROR", "Ошибка проверки статуса", e);
         }
     }

@@ -27,6 +27,7 @@ import AdminPanelScreen from './src/screens/AdminPanelScreen';
 
 // Services
 import SocketService from './src/services/SocketService';
+import ConnectionService from './src/services/ConnectionService';
 
 const Stack = createNativeStackNavigator();
 
@@ -61,6 +62,9 @@ export default function App() {
 
       // 4. Настроить notifee event handlers
       setupNotifeeHandlers();
+
+      // 5. Ensure foreground service is running if user was logged in
+      await ensureServiceRunning();
 
       console.log('[App] ✅ Инициализация завершена');
     } catch (error) {
@@ -233,6 +237,23 @@ export default function App() {
     });
 
     return unsubscribe;
+  };
+
+  /**
+   * Ensure foreground service is running (auto-restart if killed by system)
+   */
+  const ensureServiceRunning = async () => {
+    if (Platform.OS !== 'android') return;
+
+    try {
+      const running = await ConnectionService.isRunning();
+      if (!running) {
+        console.log('[App] Foreground service not running, restarting...');
+        await ConnectionService.start();
+      }
+    } catch (e) {
+      console.warn('[App] Service check failed:', e.message);
+    }
   };
 
   /**
