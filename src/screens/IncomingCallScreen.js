@@ -35,6 +35,7 @@ export default function IncomingCallScreen({route, navigation}) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [receivedOffer, setReceivedOffer] = useState(null);
 
+  const isMountedRef = useRef(true);
   const scaleAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -84,10 +85,13 @@ export default function IncomingCallScreen({route, navigation}) {
     );
 
     return () => {
+      isMountedRef.current = false;
       SocketService.off('webrtc_offer', handleOffer);
       SocketService.off('call_cancelled', handleCallCancelled);
       backHandler.remove();
       pulseLoop.stop();
+      scaleAnim.stopAnimation();
+      pulseAnim.stopAnimation();
     };
   }, []);
 
@@ -96,14 +100,16 @@ export default function IncomingCallScreen({route, navigation}) {
    */
   const handleOffer = data => {
     if (data.from !== from) return;
+    if (!isMountedRef.current) return;
 
-    console.log('IncomingCallScreen: ПОЛУЧЕН OFFER от:', data.from);
+    console.log('IncomingCallScreen: OFFER received from:', data.from);
     setReceivedOffer(data.offer);
   };
 
   const handleCallCancelled = data => {
+    if (!isMountedRef.current) return;
     if (data.from === from) {
-      console.log('✗ Звонок отменён звонящим');
+      console.log('Call cancelled by caller');
       NotificationService.cancelAllNotifications();
       navigation.goBack();
     }

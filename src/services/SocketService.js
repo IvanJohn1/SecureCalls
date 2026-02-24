@@ -5,76 +5,119 @@ import {AppState} from 'react-native';
 
 /**
  * ═══════════════════════════════════════════════════════════
- * SocketService v11.0 — Signal Architecture
+ * SocketService v12.0 — Fixed Reconnect + State Machine
  * ═══════════════════════════════════════════════════════════
  *
- * v11.0 изменения:
- * 1. ✅ callId tracking: acceptCall/endCall/cancelCall передают callId серверу
- * 2. ✅ call_initiated listener: получаем callId от сервера (для caller-стороны)
- * 3. ✅ call_timeout listener: обработка таймаута звонка на сервере
- * 4. ✅ call_ringing_offline listener: статус когда адресат offline
- * 5. ✅ Автоматическое переподключение с повторной авторизацией
- * 6. ✅ Сохранение токена для восстановления сессии
- * 7. ✅ Keepalive для стабильного соединения (важно для Xiaomi MIUI)
+ * v12.0 fixes:
+ * 1. Connection state machine: DISCONNECTED -> CONNECTING -> CONNECTED -> AUTHENTICATING -> AUTHENTICATED
+ * 2. Race condition fix: auth only runs inside 'connect' handler, guarded by isAuthenticating flag
+ * 3. Exponential backoff for manual reconnect (1s, 2s, 4s, 8s, max 30s)
+ * 4. Keepalive properly cleaned on disconnect
+ * 5. Connection timeout does NOT log user out — only explicit auth_error does
+ * 6. Reconnect indicator after 3s of DISCONNECTED state
  */
 
 console.log('╔════════════════════════════════════════╗');
-console.log('║  SocketService v10.0 PRODUCTION       ║');
+console.log('║  SocketService v12.0 STATE MACHINE     ║');
 console.log('╚════════════════════════════════════════╝');
+
+// Connection states
+const STATE = {
+  DISCONNECTED: 'DISCONNECTED',
+  CONNECTING: 'CONNECTING',
+  CONNECTED: 'CONNECTED',
+  AUTHENTICATING: 'AUTHENTICATING',
+  AUTHENTICATED: 'AUTHENTICATED',
+};
 
 class SocketService {
   constructor() {
     this.socket = null;
     this.listeners = new Map();
-    this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = Infinity;
     this.keepaliveInterval = null;
     this.isManualDisconnect = false;
-    
-    // Сохраняем учетные данные для автопереподключения
+
+    // State machine
+    this.connectionState = STATE.DISCONNECTED;
+    this.isAuthenticating = false;
+
+    // Credentials for auto-reconnect
     this.savedUsername = null;
     this.savedToken = null;
-    
-    // Флаг автопереподключения
     this.shouldAutoReconnect = false;
+
+    // Reconnect backoff
+    this.reconnectBackoff = 1000;
+    this.maxReconnectBackoff = 30000;
+    this.reconnectTimer = null;
 
     AppState.addEventListener('change', this.handleAppStateChange);
   }
 
+  _setState(newState) {
+    if (this.connectionState !== newState) {
+      console.log(`[SocketService] State: ${this.connectionState} -> ${newState}`);
+      this.connectionState = newState;
+      this.notifyListeners('connection_state', newState);
+    }
+  }
+
   /**
-   * Обработка изменения состояния приложения
+   * Handle app state changes
    */
   handleAppStateChange = async (nextAppState) => {
     console.log('[SocketService] AppState:', nextAppState);
-    
+
     if (nextAppState === 'active' && this.shouldAutoReconnect) {
-      // Приложение вернулось в foreground - проверить подключение
+      // Reset backoff when app comes to foreground
+      this.reconnectBackoff = 1000;
+
       if (!this.isConnected()) {
-        console.log('[SocketService] 🔄 Приложение активно, восстанавливаем соединение');
-        await this.reconnectWithAuth();
+        console.log('[SocketService] App active, reconnecting...');
+        this._scheduleReconnect(0); // immediate
       }
     }
   };
 
   /**
-   * Подключение к серверу
+   * Connect to server
    */
   async connect() {
     if (this.socket?.connected) {
-      console.log('[SocketService] Уже подключен');
+      console.log('[SocketService] Already connected');
       return;
     }
 
+    // Prevent multiple simultaneous connect attempts
+    if (this.connectionState === STATE.CONNECTING) {
+      console.log('[SocketService] Already connecting, waiting...');
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Таймаут подключения')), 15000);
+        const onConnect = () => { clearTimeout(timeout); resolve(); };
+        const onError = (err) => { clearTimeout(timeout); reject(err); };
+        this.socket?.once('connect', onConnect);
+        this.socket?.once('connect_error', onError);
+      });
+    }
+
+    this._setState(STATE.CONNECTING);
+
     console.log('═══════════════════════════════════════');
-    console.log('[SocketService v10.0] ПОДКЛЮЧЕНИЕ');
-    console.log('Сервер:', SERVER_URL);
+    console.log('[SocketService v12.0] CONNECTING');
+    console.log('Server:', SERVER_URL);
     console.log('═══════════════════════════════════════');
 
     try {
+      // Clean up old socket if exists
+      if (this.socket) {
+        try { this.socket.removeAllListeners(); this.socket.disconnect(); } catch (e) { /* ignore */ }
+        this.socket = null;
+      }
+
       this.socket = io(SERVER_URL, {
         transports: ['websocket', 'polling'],
         reconnection: true,
-        reconnectionAttempts: this.maxReconnectAttempts,
+        reconnectionAttempts: Infinity,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
         timeout: 10000,
@@ -89,99 +132,108 @@ class SocketService {
 
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
+          this._setState(STATE.DISCONNECTED);
           reject(new Error('Таймаут подключения'));
         }, 15000);
 
         this.socket.once('connect', () => {
           clearTimeout(timeout);
-          console.log('[SocketService] ✓ ПОДКЛЮЧЕНО');
+          console.log('[SocketService] CONNECTED');
           this.isManualDisconnect = false;
           resolve();
         });
 
         this.socket.once('connect_error', error => {
           clearTimeout(timeout);
-          console.error('[SocketService] ❌ Ошибка подключения:', error.message);
+          console.error('[SocketService] Connection error:', error.message);
+          this._setState(STATE.DISCONNECTED);
           reject(error);
         });
       });
     } catch (error) {
-      console.error('[SocketService] ❌ Ошибка подключения:', error);
+      console.error('[SocketService] Connection error:', error);
+      this._setState(STATE.DISCONNECTED);
       throw error;
     }
   }
 
   /**
-   * КРИТИЧНО: Настройка слушателей сокета
+   * Socket event listeners
    */
   setupSocketListeners() {
-    // Подключение установлено
+    // Connected
     this.socket.on('connect', async () => {
-      console.log('[SocketService] ✅ Подключено');
-      this.reconnectAttempts = 0;
+      console.log('[SocketService] Connected');
+      this._setState(STATE.CONNECTED);
+      this.reconnectBackoff = 1000; // Reset backoff
       this.notifyListeners('connect');
-      
-      // АВТОМАТИЧЕСКАЯ ПОВТОРНАЯ АВТОРИЗАЦИЯ
+
+      // AUTO RE-AUTH: only attempt if we have saved credentials
       if (this.shouldAutoReconnect && this.savedUsername && this.savedToken) {
-        console.log('[SocketService] 🔐 Автоматическая повторная авторизация...');
+        if (this.isAuthenticating) {
+          console.log('[SocketService] Auth already in progress, skipping');
+          return;
+        }
+
+        console.log('[SocketService] Auto re-authenticating...');
         try {
           await this.authenticateWithToken(this.savedUsername, this.savedToken);
-          console.log('[SocketService] ✅ Повторная авторизация успешна');
+          console.log('[SocketService] Re-authentication successful');
         } catch (error) {
-          console.error('[SocketService] ❌ Ошибка повторной авторизации:', error);
+          console.error('[SocketService] Re-authentication failed:', error.message);
           this.notifyListeners('auth_failed', {message: 'Не удалось восстановить сессию'});
         }
       }
     });
 
-    // Отключение
+    // Disconnected
     this.socket.on('disconnect', (reason) => {
-      console.log('[SocketService] ⚠️ Отключено:', reason);
+      console.log('[SocketService] Disconnected:', reason);
+      this.isAuthenticating = false;
+      this._setState(STATE.DISCONNECTED);
       this.notifyListeners('disconnect', reason);
-      
-      // Если это не ручное отключение - пытаемся переподключиться
-      if (!this.isManualDisconnect && this.shouldAutoReconnect) {
-        console.log('[SocketService] 🔄 Будет попытка автопереподключения');
+
+      // Schedule reconnect for 'io server disconnect' (server-initiated)
+      // Socket.IO auto-reconnects for transport issues, but NOT for server disconnect
+      if (reason === 'io server disconnect' && !this.isManualDisconnect && this.shouldAutoReconnect) {
+        console.log('[SocketService] Server initiated disconnect, scheduling reconnect...');
+        this._scheduleReconnect();
       }
     });
 
-    // Попытка переподключения
+    // Reconnection events from socket.io
     this.socket.on('reconnect_attempt', (attempt) => {
-      console.log(`[SocketService] 🔄 Попытка переподключения ${attempt}...`);
-      this.reconnectAttempts = attempt;
+      console.log(`[SocketService] Reconnect attempt ${attempt}...`);
+      this._setState(STATE.CONNECTING);
       this.notifyListeners('reconnecting', attempt);
     });
 
-    // Успешное переподключение
     this.socket.on('reconnect', (attempt) => {
-      console.log(`[SocketService] ✅ Переподключено после ${attempt} попыток`);
-      this.reconnectAttempts = 0;
+      console.log(`[SocketService] Reconnected after ${attempt} attempts`);
       this.notifyListeners('reconnect', attempt);
     });
 
-    // Ошибка переподключения
     this.socket.on('reconnect_error', (error) => {
-      console.error('[SocketService] ❌ Ошибка переподключения:', error.message);
+      console.error('[SocketService] Reconnect error:', error.message);
     });
 
-    // Переподключение не удалось
     this.socket.on('reconnect_failed', () => {
-      console.error('[SocketService] ❌ Переподключение не удалось');
+      console.error('[SocketService] Reconnect failed');
+      this._setState(STATE.DISCONNECTED);
       this.notifyListeners('reconnect_failed');
     });
 
-    // Ошибка подключения
     this.socket.on('connect_error', (error) => {
-      console.error('[SocketService] ❌ Ошибка подключения:', error.message);
+      console.error('[SocketService] Connect error:', error.message);
     });
 
-    // Входящий звонок
+    // Incoming call
     this.socket.on('incoming_call', data => {
-      console.log('[SocketService] 📞 INCOMING_CALL от:', data.from);
+      console.log('[SocketService] INCOMING_CALL from:', data.from);
       this.notifyListeners('incoming_call', data);
     });
 
-    // Остальные события
+    // All other events
     this.socket.on('users_list', data => this.notifyListeners('users_list', data));
     this.socket.on('user_online', data => this.notifyListeners('user_online', data));
     this.socket.on('user_offline', data => this.notifyListeners('user_offline', data));
@@ -193,94 +245,119 @@ class SocketService {
     this.socket.on('call_ended', data => this.notifyListeners('call_ended', data));
     this.socket.on('call_cancelled', data => this.notifyListeners('call_cancelled', data));
     this.socket.on('call_failed', data => this.notifyListeners('call_failed', data));
-    // [NEW v11.0] callId management events
     this.socket.on('call_initiated', data => {
-      console.log('[SocketService] 📞 call_initiated, callId:', data.callId);
+      console.log('[SocketService] call_initiated, callId:', data.callId);
       this.notifyListeners('call_initiated', data);
     });
     this.socket.on('call_timeout', data => {
-      console.log('[SocketService] ⏰ call_timeout');
+      console.log('[SocketService] call_timeout');
       this.notifyListeners('call_timeout', data);
     });
     this.socket.on('call_ringing_offline', data => {
-      console.log('[SocketService] 📵 call_ringing_offline, callId:', data.callId);
+      console.log('[SocketService] call_ringing_offline, callId:', data.callId);
       this.notifyListeners('call_ringing_offline', data);
     });
     this.socket.on('new_message', data => this.notifyListeners('new_message', data));
     this.socket.on('message_sent', data => this.notifyListeners('message_sent', data));
     this.socket.on('message_history', data => this.notifyListeners('message_history', data));
     this.socket.on('typing', data => this.notifyListeners('typing', data));
-    this.socket.on('force_disconnect', data => this.notifyListeners('force_disconnect', data));
+    this.socket.on('force_disconnect', data => {
+      // Server asked us to disconnect — don't auto-reconnect
+      this.shouldAutoReconnect = false;
+      this.notifyListeners('force_disconnect', data);
+    });
     this.socket.on('error', data => {
-      console.error('[SocketService] ❌ Ошибка сервера:', data);
+      console.error('[SocketService] Server error:', data);
       this.notifyListeners('error', data);
     });
-    
-    // Админ события
+
+    // Admin events
     this.socket.on('user_deleted', data => this.notifyListeners('user_deleted', data));
     this.socket.on('user_banned', data => this.notifyListeners('user_banned', data));
   }
 
   /**
-   * НОВОЕ: Переподключение с авторизацией
+   * Schedule reconnect with exponential backoff
    */
-  async reconnectWithAuth() {
-    try {
-      if (!this.savedUsername || !this.savedToken) {
-        console.log('[SocketService] ⚠️ Нет сохраненных данных для переподключения');
-        return false;
-      }
-
-      console.log('[SocketService] 🔄 Переподключение с авторизацией...');
-      
-      // Если сокет отключен - подключаем заново
-      if (!this.socket || !this.socket.connected) {
-        await this.connect();
-      }
-      
-      // Авторизуемся
-      await this.authenticateWithToken(this.savedUsername, this.savedToken);
-      
-      console.log('[SocketService] ✅ Переподключение успешно');
-      return true;
-      
-    } catch (error) {
-      console.error('[SocketService] ❌ Ошибка переподключения:', error);
-      return false;
+  _scheduleReconnect(delayOverride) {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
     }
+
+    const delay = delayOverride !== undefined ? delayOverride : this.reconnectBackoff;
+
+    console.log(`[SocketService] Reconnecting in ${delay}ms...`);
+
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      if (this.isManualDisconnect || !this.shouldAutoReconnect) return;
+
+      try {
+        await this.reconnectWithAuth();
+      } catch (e) {
+        console.error('[SocketService] Reconnect failed:', e.message);
+        // Increase backoff
+        this.reconnectBackoff = Math.min(this.reconnectBackoff * 2, this.maxReconnectBackoff);
+        if (this.shouldAutoReconnect && !this.isManualDisconnect) {
+          this._scheduleReconnect();
+        }
+      }
+    }, delay);
   }
 
   /**
-   * Keepalive для поддержания соединения
+   * Reconnect with auth
+   */
+  async reconnectWithAuth() {
+    if (!this.savedUsername || !this.savedToken) {
+      console.log('[SocketService] No saved credentials for reconnect');
+      return false;
+    }
+
+    console.log('[SocketService] Reconnecting with auth...');
+
+    if (!this.socket || !this.socket.connected) {
+      await this.connect();
+    }
+
+    // Auth is handled automatically in the 'connect' handler
+    // Wait for auth to complete
+    if (this.connectionState === STATE.AUTHENTICATED) {
+      return true;
+    }
+
+    // If not authenticated yet, the connect handler will handle it
+    console.log('[SocketService] Reconnection initiated, auth will follow');
+    return true;
+  }
+
+  /**
+   * Keepalive
    */
   startKeepalive() {
-    if (this.keepaliveInterval) {
-      clearInterval(this.keepaliveInterval);
-    }
+    this.stopKeepalive();
 
     this.keepaliveInterval = setInterval(() => {
       if (this.socket?.connected) {
         this.socket.emit('ping', {timestamp: Date.now()});
-        // console.log('[SocketService] 💓 Keepalive');
       }
     }, 25000);
 
-    console.log('[SocketService] ✓ Keepalive запущен');
+    console.log('[SocketService] Keepalive started');
   }
 
   stopKeepalive() {
     if (this.keepaliveInterval) {
       clearInterval(this.keepaliveInterval);
       this.keepaliveInterval = null;
-      console.log('[SocketService] Keepalive остановлен');
     }
   }
 
   /**
-   * Отключение от сервера
+   * Disconnect
    */
   disconnect(manual = false) {
-    console.log('[SocketService] 🔌 Отключение (ручное:', manual, ')');
+    console.log('[SocketService] Disconnect (manual:', manual, ')');
 
     this.isManualDisconnect = manual;
     if (manual) {
@@ -289,22 +366,35 @@ class SocketService {
       this.savedToken = null;
     }
 
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
     this.stopKeepalive();
+    this.isAuthenticating = false;
 
     if (this.socket) {
       this.socket.disconnect();
       if (manual) {
+        try { this.socket.removeAllListeners(); } catch (e) { /* ignore */ }
         this.socket = null;
       }
     }
+
+    this._setState(STATE.DISCONNECTED);
   }
 
   isConnected() {
     return this.socket?.connected || false;
   }
 
+  getConnectionState() {
+    return this.connectionState;
+  }
+
   /**
-   * Регистрация
+   * Register
    */
   async register(username, password) {
     return new Promise((resolve, reject) => {
@@ -316,16 +406,16 @@ class SocketService {
 
       this.socket.once('register_success', async (data) => {
         clearTimeout(timeout);
-        
-        // Сохраняем данные для автопереподключения
+
         this.savedUsername = data.username;
         this.savedToken = data.token;
         this.shouldAutoReconnect = true;
-        
+        this._setState(STATE.AUTHENTICATED);
+
         await AsyncStorage.setItem('username', data.username);
         await AsyncStorage.setItem('token', data.token);
-        
-        console.log('[SocketService] ✅ Регистрация успешна');
+
+        console.log('[SocketService] Registration successful');
         resolve(data);
       });
 
@@ -337,7 +427,7 @@ class SocketService {
   }
 
   /**
-   * Вход
+   * Login
    */
   async login(username, password) {
     return new Promise((resolve, reject) => {
@@ -349,16 +439,16 @@ class SocketService {
 
       this.socket.once('login_success', async (data) => {
         clearTimeout(timeout);
-        
-        // Сохраняем данные для автопереподключения
+
         this.savedUsername = data.username;
         this.savedToken = data.token;
         this.shouldAutoReconnect = true;
-        
+        this._setState(STATE.AUTHENTICATED);
+
         await AsyncStorage.setItem('username', data.username);
         await AsyncStorage.setItem('token', data.token);
-        
-        console.log('[SocketService] ✅ Вход успешен');
+
+        console.log('[SocketService] Login successful');
         resolve(data);
       });
 
@@ -370,50 +460,104 @@ class SocketService {
   }
 
   /**
-   * КРИТИЧНО: Авторизация по токену
+   * Token auth — with isAuthenticating guard to prevent race conditions
    */
   async authenticateWithToken(username, token) {
+    if (this.isAuthenticating) {
+      console.log('[SocketService] Auth already in progress, waiting...');
+      // Wait for current auth to finish
+      return new Promise((resolve, reject) => {
+        const checkInterval = setInterval(() => {
+          if (!this.isAuthenticating) {
+            clearInterval(checkInterval);
+            if (this.connectionState === STATE.AUTHENTICATED) {
+              resolve({username});
+            } else {
+              reject(new Error('Предыдущая авторизация не удалась'));
+            }
+          }
+        }, 200);
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          reject(new Error('Таймаут ожидания авторизации'));
+        }, 15000);
+      });
+    }
+
+    this.isAuthenticating = true;
+    this._setState(STATE.AUTHENTICATING);
+
     return new Promise((resolve, reject) => {
-      if (!this.socket?.connected) {
+      // FIX: Don't check socket.connected here directly — we are called from
+      // the 'connect' handler, so the socket IS connected. The previous bug
+      // was that after 'io server disconnect' the re-auth fired before the
+      // state was fully consistent.
+      if (!this.socket) {
+        this.isAuthenticating = false;
+        this._setState(STATE.DISCONNECTED);
         reject(new Error('Нет подключения к серверу'));
         return;
       }
 
       this.socket.emit('auth_token', {username, token});
 
-      const timeout = setTimeout(() => {
+      const cleanup = () => {
+        clearTimeout(authTimeout);
+        this.socket?.off('disconnect', onDisconnect);
+      };
+
+      const authTimeout = setTimeout(() => {
+        cleanup();
+        this.isAuthenticating = false;
+        if (this.socket?.connected) {
+          this._setState(STATE.CONNECTED);
+        } else {
+          this._setState(STATE.DISCONNECTED);
+        }
         reject(new Error('Таймаут авторизации'));
       }, 10000);
 
+      // If we disconnect during auth, cancel
+      const onDisconnect = () => {
+        cleanup();
+        this.isAuthenticating = false;
+        this._setState(STATE.DISCONNECTED);
+        reject(new Error('Отключено во время авторизации'));
+      };
+      this.socket.once('disconnect', onDisconnect);
+
       this.socket.once('auth_success', (data) => {
-        clearTimeout(timeout);
-        
-        // Сохраняем данные для автопереподключения
+        cleanup();
+        this.isAuthenticating = false;
+
         this.savedUsername = username;
         this.savedToken = token;
         this.shouldAutoReconnect = true;
-        
-        console.log('[SocketService] ✅ Авторизация по токену успешна');
+        this._setState(STATE.AUTHENTICATED);
+
+        console.log('[SocketService] Token auth successful');
         resolve(data);
       });
 
       this.socket.once('auth_error', (data) => {
-        clearTimeout(timeout);
-        console.error('[SocketService] ❌ Ошибка авторизации:', data.message);
+        cleanup();
+        this.isAuthenticating = false;
+        this._setState(STATE.CONNECTED);
+        console.error('[SocketService] Auth error:', data.message);
         reject(new Error(data.message));
       });
     });
   }
 
   /**
-   * Регистрация FCM токена
+   * Register FCM token
    */
   registerFCMToken(username, fcmToken, platform) {
     if (this.socket?.connected) {
-      console.log('[SocketService] 📱 Регистрация FCM токена');
+      console.log('[SocketService] Registering FCM token');
       this.socket.emit('register_fcm_token', {username, fcmToken, platform});
     } else {
-      console.warn('[SocketService] ⚠️ Не подключен - FCM токен не зарегистрирован');
+      console.warn('[SocketService] Not connected - FCM token not registered');
     }
   }
 
@@ -421,70 +565,69 @@ class SocketService {
     if (this.socket?.connected) {
       this.socket.emit('logout');
     }
-    
-    // Очистить данные автопереподключения
+
     this.shouldAutoReconnect = false;
     this.savedUsername = null;
     this.savedToken = null;
+    this.isAuthenticating = false;
+    this._setState(STATE.DISCONNECTED);
   }
 
   // ═══════════════════════════════════════════════════════════
-  // ЗВОНКИ
+  // CALLS
   // ═══════════════════════════════════════════════════════════
   makeCall(to, isVideo) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен - невозможно позвонить');
+      console.error('[SocketService] Not connected - cannot call');
       return false;
     }
 
     this.socket.emit('call', {to, isVideo});
-    console.log('[SocketService] → Звонок:', to);
+    console.log('[SocketService] -> Call:', to);
     return true;
   }
 
-  // [FIX v11.0] Передаём callId чтобы сервер мог корректно отменить таймер missed_call
   acceptCall(from, callId) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     this.socket.emit('accept_call', {from, callId});
-    console.log('[SocketService] → Звонок принят, callId:', callId);
+    console.log('[SocketService] -> Call accepted, callId:', callId);
     return true;
   }
 
   rejectCall(from, callId) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     this.socket.emit('reject_call', {from, callId});
-    console.log('[SocketService] → Звонок отклонен');
+    console.log('[SocketService] -> Call rejected');
     return true;
   }
 
-  // [FIX v11.0] Передаём to и callId — сервер отправит call_ended ТОЛЬКО собеседнику
   endCall(to, callId) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     this.socket.emit('end_call', {to, callId});
-    console.log('[SocketService] → Звонок завершен, to:', to, 'callId:', callId);
+    console.log('[SocketService] -> Call ended, to:', to, 'callId:', callId);
     return true;
   }
 
   cancelCall(to, callId) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     this.socket.emit('cancel_call', {to, callId});
-    console.log('[SocketService] → Звонок отменен, callId:', callId);
+    console.log('[SocketService] -> Call cancelled, callId:', callId);
     return true;
   }
 
@@ -493,23 +636,23 @@ class SocketService {
   // ═══════════════════════════════════════════════════════════
   sendWebRTCOffer(to, offer) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     this.socket.emit('webrtc_offer', {to, offer});
-    console.log('[SocketService] → Offer отправлен');
+    console.log('[SocketService] -> Offer sent');
     return true;
   }
 
   sendWebRTCAnswer(to, answer) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     this.socket.emit('webrtc_answer', {to, answer});
-    console.log('[SocketService] → Answer отправлен');
+    console.log('[SocketService] -> Answer sent');
     return true;
   }
 
@@ -523,11 +666,11 @@ class SocketService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // ПОЛЬЗОВАТЕЛИ
+  // USERS
   // ═══════════════════════════════════════════════════════════
   getUsers(includeOffline = true) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
@@ -536,33 +679,33 @@ class SocketService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // СООБЩЕНИЯ
+  // MESSAGES
   // ═══════════════════════════════════════════════════════════
-  
+
   sendMessage(to, message, timestamp) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен - невозможно отправить сообщение');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     try {
       this.socket.emit('send_message', {to, message, timestamp});
-      console.log('[SocketService] → Сообщение отправлено');
+      console.log('[SocketService] -> Message sent');
       return true;
     } catch (error) {
-      console.error('[SocketService] ✗ Ошибка отправки:', error);
+      console.error('[SocketService] Send error:', error);
       return false;
     }
   }
 
   getMessageHistory(withUser, limit = 100) {
     if (!this.socket?.connected) {
-      console.warn('[SocketService] ⚠️ Не подключен - невозможно получить историю');
+      console.warn('[SocketService] Not connected - cannot get history');
       return false;
     }
 
     this.socket.emit('get_messages', {withUser, limit});
-    console.log('[SocketService] → Запрос истории сообщений с:', withUser);
+    console.log('[SocketService] -> Message history request:', withUser);
     return true;
   }
 
@@ -589,55 +732,55 @@ class SocketService {
   }
 
   // ═══════════════════════════════════════════════════════════
-  // АДМИН ФУНКЦИИ
+  // ADMIN
   // ═══════════════════════════════════════════════════════════
 
   adminDeleteUser(targetUsername) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     this.socket.emit('admin_delete_user', {targetUsername});
-    console.log('[SocketService] → Админ: удаление пользователя', targetUsername);
+    console.log('[SocketService] -> Admin: delete user', targetUsername);
     return true;
   }
 
   adminBanUser(targetUsername, reason) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     this.socket.emit('admin_ban_user', {targetUsername, reason});
-    console.log('[SocketService] → Админ: бан пользователя', targetUsername);
+    console.log('[SocketService] -> Admin: ban user', targetUsername);
     return true;
   }
 
   adminUnbanUser(targetUsername) {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     this.socket.emit('admin_unban_user', {targetUsername});
-    console.log('[SocketService] → Админ: разбан пользователя', targetUsername);
+    console.log('[SocketService] -> Admin: unban user', targetUsername);
     return true;
   }
 
   deleteMyAccount() {
     if (!this.socket?.connected) {
-      console.error('[SocketService] ✗ Не подключен');
+      console.error('[SocketService] Not connected');
       return false;
     }
 
     this.socket.emit('delete_my_account');
-    console.log('[SocketService] → Удаление своего аккаунта');
+    console.log('[SocketService] -> Delete my account');
     return true;
   }
 
   // ═══════════════════════════════════════════════════════════
-  // СОБЫТИЯ
+  // EVENT SYSTEM
   // ═══════════════════════════════════════════════════════════
   on(event, callback) {
     if (!this.listeners.has(event)) {
@@ -661,7 +804,7 @@ class SocketService {
       try {
         callback(data);
       } catch (error) {
-        console.error(`[SocketService] Ошибка в обработчике ${event}:`, error);
+        console.error(`[SocketService] Error in handler ${event}:`, error);
       }
     });
   }

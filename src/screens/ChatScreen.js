@@ -1,4 +1,4 @@
-import React, {useState, useEffect, useRef, useCallback} from 'react';
+import React, {useState, useEffect, useRef} from 'react';
 import {
   View,
   Text,
@@ -41,13 +41,6 @@ export default function ChatScreen({route, navigation}) {
   const flatListRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const isMountedRef = useRef(true);
-  const messagesRef = useRef([]); // ← Ref для доступа к актуальным messages
-
-  // Синхронизируем ref с state
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-
   useEffect(() => {
     console.log('[ChatScreen v9.0] 💬 Открыт чат с:', targetUser);
 
@@ -144,16 +137,9 @@ export default function ChatScreen({route, navigation}) {
         isMine: msg.from === username,
       }));
 
-      setMessages(formattedMessages);
+      // Store messages in reverse order (newest first) for inverted FlatList
+      setMessages(formattedMessages.reverse());
       setIsLoadingHistory(false);
-
-      // FIX: Многоступенчатый скролл к концу
-      // Первый — сразу после setState (может не сработать)
-      setTimeout(() => scrollToBottom(false), 50);
-      // Второй — после layout
-      setTimeout(() => scrollToBottom(false), 200);
-      // Третий — гарантированный
-      setTimeout(() => scrollToBottom(false), 500);
     }
   };
 
@@ -175,14 +161,13 @@ export default function ChatScreen({route, navigation}) {
         isMine: false,
       };
 
-      setMessages(prev => [...prev, newMessage]);
+      // Prepend to array — inverted FlatList shows index 0 at the bottom
+      setMessages(prev => [newMessage, ...prev]);
 
       // Отметить как прочитанное
       if (data.messageId) {
         SocketService.markAsRead(targetUser, data.messageId);
       }
-
-      setTimeout(() => scrollToBottom(true), 100);
     }
   };
 
@@ -210,22 +195,11 @@ export default function ChatScreen({route, navigation}) {
       isMine: true,
     };
 
-    setMessages(prev => [...prev, sentMessage]);
-    setTimeout(() => scrollToBottom(true), 100);
+    // Prepend to array — inverted FlatList shows index 0 at the bottom
+    setMessages(prev => [sentMessage, ...prev]);
   };
 
-  /**
-   * FIX: Прокрутка к последнему сообщению
-   * Не зависит от замыкания messages — использует ref
-   */
-  const scrollToBottom = useCallback((animated = true) => {
-    if (!isMountedRef.current || !flatListRef.current) return;
-    try {
-      flatListRef.current.scrollToEnd({animated});
-    } catch (e) {
-      // Игнорируем ошибки скролла
-    }
-  }, []);
+  // scrollToBottom no longer needed — inverted FlatList auto-scrolls to newest
 
   /**
    * Отправка сообщения
@@ -308,14 +282,7 @@ export default function ChatScreen({route, navigation}) {
     );
   };
 
-  /**
-   * FIX: onContentSizeChange — скроллим при любом изменении размера контента
-   */
-  const handleContentSizeChange = useCallback(() => {
-    if (!isLoadingHistory && messagesRef.current.length > 0) {
-      scrollToBottom(false);
-    }
-  }, [isLoadingHistory, scrollToBottom]);
+  // handleContentSizeChange no longer needed — inverted FlatList handles this
 
   return (
     <KeyboardAvoidingView
@@ -351,15 +318,9 @@ export default function ChatScreen({route, navigation}) {
           data={messages}
           renderItem={renderMessage}
           keyExtractor={item => item.id}
-          contentContainerStyle={[
-            styles.messagesList,
-            // FIX: если сообщений мало — прижимаем их к низу
-            messages.length < 10 && {flexGrow: 1, justifyContent: 'flex-end'},
-          ]}
-          onContentSizeChange={handleContentSizeChange}
+          inverted={true}
+          contentContainerStyle={styles.messagesList}
           showsVerticalScrollIndicator={false}
-          // FIX: Убрали onLayout дублирующий скролл,
-          // достаточно onContentSizeChange + таймеры в handleMessageHistory
         />
       )}
 

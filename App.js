@@ -150,28 +150,29 @@ export default function App() {
 
       try {
         if (data.type === 'incoming_call') {
-          console.log('[App FG] 📞 Звонок от:', data.from);
+          console.log('[App FG] Call from:', data.from);
 
-          // Показать notification (даже в foreground)
+          // Show notification even in foreground
           await notifee.displayNotification({
             id: `call-fg-${data.from}-${Date.now()}`,
-            title: data.isVideo === 'true' 
-              ? '📹 Входящий видеозвонок' 
-              : '📞 Входящий звонок',
+            title: data.isVideo === 'true'
+              ? 'Входящий видеозвонок'
+              : 'Входящий звонок',
             body: `${data.from} звонит вам`,
             android: {
               channelId: 'incoming-calls',
               importance: AndroidImportance.HIGH,
               fullScreenAction: {
-                id: 'default',
+                id: 'incoming_call',
+                launchActivity: 'default',
               },
               actions: [
                 {
-                  title: '✓ Ответить',
-                  pressAction: {id: 'answer'},
+                  title: 'Ответить',
+                  pressAction: {id: 'answer', launchActivity: 'default'},
                 },
                 {
-                  title: '✕ Отклонить',
+                  title: 'Отклонить',
                   pressAction: {id: 'reject'},
                 },
               ],
@@ -181,11 +182,12 @@ export default function App() {
             data: {
               type: 'incoming_call',
               from: data.from,
-              isVideo: data.isVideo,
+              isVideo: data.isVideo || 'false',
+              callId: data.callId || '',
             },
           });
 
-          console.log('[App FG] ✅ Notification показан');
+          console.log('[App FG] Notification shown');
         } 
         else if (data.type === 'message') {
           console.log('[App FG] 💬 Сообщение от:', data.from);
@@ -261,25 +263,25 @@ export default function App() {
     const data = notification?.data || {};
 
     if (pressAction?.id === 'answer') {
-      console.log('[App] ✅ Принять звонок от:', data.from);
+      console.log('[App] Accept call from:', data.from);
 
-      // Отменить notification
+      // Cancel notification
       await notifee.cancelNotification(notification?.id);
 
-      // Принять через Socket
+      // Accept via Socket
       if (SocketService.isConnected()) {
-        SocketService.acceptCall(data.from);
+        SocketService.acceptCall(data.from, data.callId);
       }
-    } 
+    }
     else if (pressAction?.id === 'reject') {
-      console.log('[App] ❌ Отклонить звонок от:', data.from);
+      console.log('[App] Reject call from:', data.from);
 
-      // Отменить notification
+      // Cancel notification
       await notifee.cancelNotification(notification?.id);
 
-      // Отклонить через Socket
+      // Reject via Socket
       if (SocketService.isConnected()) {
-        SocketService.rejectCall(data.from);
+        SocketService.rejectCall(data.from, data.callId);
       }
     } 
     else if (pressAction?.id === 'call_back') {
