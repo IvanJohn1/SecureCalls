@@ -41,6 +41,9 @@ public class MainApplication extends Application implements ReactApplication {
                     // Регистрация ConnectionServicePackage
                     packages.add(new ConnectionServicePackage());
 
+                    // Регистрация NativeStoragePackage
+                    packages.add(new NativeStoragePackage());
+
                     return packages;
                 }
 

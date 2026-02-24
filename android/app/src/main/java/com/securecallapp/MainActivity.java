@@ -10,6 +10,7 @@ import com.facebook.react.bridge.WritableMap; // Добавлен импорт
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.PowerManager;
 import android.view.WindowManager;
 import android.content.Intent;
 import android.util.Log;
@@ -59,6 +60,32 @@ public class MainActivity extends ReactActivity {
         }
 
         handleIntent(getIntent());
+
+        // Check battery optimization status and emit event to JS if needed
+        checkBatteryOptimization();
+    }
+
+    private void checkBatteryOptimization() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                Log.w(TAG, "Battery optimization is ON — incoming calls may not work reliably");
+                // JS side will receive this via a DeviceEvent and show a dialog
+                try {
+                    ReactContext reactContext = getReactNativeHost()
+                            .getReactInstanceManager()
+                            .getCurrentReactContext();
+                    if (reactContext != null && reactContext.hasActiveReactInstance()) {
+                        reactContext
+                                .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                                .emit("batteryOptimizationEnabled", null);
+                    }
+                } catch (Exception e) {
+                    // ReactContext may not be ready yet — that's fine,
+                    // LoginScreen will handle this on its own.
+                }
+            }
+        }
     }
 
     @Override
@@ -141,12 +168,13 @@ public class MainActivity extends ReactActivity {
     protected void onResume() {
         super.onResume();
         if (hasPendingCall && pendingCallFrom != null) {
-            // [FIX] Increased delay to 2500ms to give auto-login time to complete
-            getWindow().getDecorView().postDelayed(() -> {
+            // Send event on next frame — JS uses waitForAuthentication()
+            // to ensure socket is ready before accepting the call.
+            getWindow().getDecorView().post(() -> {
                 if (hasPendingCall) {
                     sendIncomingCallEvent(pendingCallFrom, pendingCallIsVideo, pendingCallId);
                 }
-            }, 2500);
+            });
         }
     }
 

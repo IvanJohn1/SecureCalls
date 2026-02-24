@@ -65,11 +65,12 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
      * Показать full-screen notification о входящем звонке
      */
     @ReactMethod
-    public void showIncomingCallNotification(String from, boolean isVideo) {
+    public void showIncomingCallNotification(String from, boolean isVideo, String callId) {
         Log.d(TAG, "========================================");
         Log.d(TAG, "📞 ПОКАЗ NOTIFICATION О ЗВОНКЕ");
         Log.d(TAG, "От: " + from);
         Log.d(TAG, "Видео: " + isVideo);
+        Log.d(TAG, "CallId: " + callId);
         Log.d(TAG, "========================================");
 
         try {
@@ -77,12 +78,15 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
             Intent intent = new Intent(reactContext, MainActivity.class);
             intent.setAction(Intent.ACTION_MAIN);
             intent.addCategory(Intent.CATEGORY_LAUNCHER);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | 
-                          Intent.FLAG_ACTIVITY_CLEAR_TOP | 
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
+                          Intent.FLAG_ACTIVITY_CLEAR_TOP |
                           Intent.FLAG_ACTIVITY_SINGLE_TOP);
             intent.putExtra("type", "incoming_call");
             intent.putExtra("from", from);
             intent.putExtra("isVideo", isVideo);
+            if (callId != null && !callId.isEmpty()) {
+                intent.putExtra("callId", callId);
+            }
 
             PendingIntent pendingIntent = PendingIntent.getActivity(
                 reactContext,
@@ -94,11 +98,14 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
             // Full-screen intent для показа поверх экрана блокировки
             Intent fullScreenIntent = new Intent(reactContext, MainActivity.class);
             fullScreenIntent.setAction(Intent.ACTION_MAIN);
-            fullScreenIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | 
+            fullScreenIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
                                     Intent.FLAG_ACTIVITY_CLEAR_TOP);
             fullScreenIntent.putExtra("type", "incoming_call");
             fullScreenIntent.putExtra("from", from);
             fullScreenIntent.putExtra("isVideo", isVideo);
+            if (callId != null && !callId.isEmpty()) {
+                fullScreenIntent.putExtra("callId", callId);
+            }
 
             PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
                 reactContext,
