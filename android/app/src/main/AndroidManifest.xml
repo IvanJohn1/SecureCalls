@@ -2,23 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Network permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     
-    <!-- Media permissions -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     
-    <!-- Bluetooth permissions -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- Notification permissions -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
@@ -26,20 +22,18 @@
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Foreground service permissions -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <!-- ИСПРАВЛЕНО: FOREGROUND_SERVICE_PHONE_CALL удалён — тип phoneCall убран из сервиса.
+         Оставшиеся типы: connectedDevice + dataSync. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     
-    <!-- Storage permissions -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Hardware features -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
@@ -64,17 +58,20 @@
         android:hardwareAccelerated="true"
         android:supportsRtl="true"
         android:requestLegacyExternalStorage="true"
-        android:extractNativeLibs="true"
         tools:targetApi="35">
+        <!--
+            ИСПРАВЛЕНО: android:extractNativeLibs убран из манифеста.
+            AGP 8.x требует этот параметр в build.gradle:
 
-        <!-- КРИТИЧНО ДЛЯ ANDROID 15 (16KB PAGE SIZE):
-             extractNativeLibs="true" заставляет систему извлекать .so файлы
-             из APK на диск при установке. При извлечении система выравнивает
-             файлы по текущему размеру страницы (16KB на Android 15), что
-             обходит SIGSEGV (SEGV_ACCERR) в ElfReader::LoadSegments,
-             возникающий при прямом mmap из APK для .so с p_align=4096.
-             Побочный эффект: +10-15% к размеру установки (сжатые .so в APK). -->
-        
+            android {
+                packagingOptions {
+                    jniLibs { useLegacyPackaging = true }
+                }
+            }
+
+            Это обязательно для 16KB page size на Android 15.
+        -->
+
         <activity
             android:name=".MainActivity"
             android:label="@string/app_name"
@@ -102,15 +99,20 @@
             </intent-filter>
         </activity>
 
-        <!-- Foreground service for connection management -->
+        <!--
+            ИСПРАВЛЕНО: Убран тип "phoneCall".
+            На Android 14+ (API 34+) foregroundServiceType="phoneCall" требует,
+            чтобы сервис управлял реальным звонком через ConnectionService/Telecom API.
+            Старт такого сервиса без активного вызова → ForegroundServiceStartNotAllowedException → краш.
+            Этот сервис — VoIP keepalive, поэтому правильные типы: connectedDevice + dataSync.
+        -->
         <service
             android:name=".ConnectionForegroundService"
             android:enabled="true"
             android:exported="false"
             android:stopWithTask="false"
-            android:foregroundServiceType="phoneCall|connectedDevice|dataSync" />
+            android:foregroundServiceType="connectedDevice|dataSync" />
 
-        <!-- Firebase Messaging Service -->
         <service
             android:name=".MyFirebaseMessagingService"
             android:enabled="true"
@@ -122,7 +124,6 @@
             </intent-filter>
         </service>
 
-        <!-- Firebase notification metadata -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/colorPrimary" 
@@ -145,17 +146,21 @@
             android:name="firebase_analytics_collection_enabled"
             android:value="false" />
 
-        <!-- Notifee metadata -->
         <meta-data
             android:name="app.notifee.notification.main_component"
             android:value="SecureCallApp" />
 
-        <!-- Boot receiver -->
+        <!--
+            ИСПРАВЛЕНО: Убран android:permission="android.permission.RECEIVE_BOOT_COMPLETED".
+            Атрибут android:permission на receiver означает: "отправитель ДОЛЖЕН держать это разрешение".
+            Система при BOOT_COMPLETED НЕ держит RECEIVE_BOOT_COMPLETED (это разрешение для получателя,
+            не для отправителя). Результат: BootReceiver никогда не срабатывал — broadcast отклонялся.
+            Разрешение RECEIVE_BOOT_COMPLETED в <uses-permission> выше достаточно.
+        -->
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
-            android:exported="true"
-            android:permission="android.permission.RECEIVE_BOOT_COMPLETED">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
@@ -165,7 +170,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- Dev settings activity -->
         <activity
             android:name="com.facebook.react.devsupport.DevSettingsActivity"
             android:exported="false" />

@@ -7,6 +7,7 @@ import com.facebook.react.ReactNativeHost;
 import com.facebook.react.ReactPackage;
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint;
 import com.facebook.react.defaults.DefaultReactNativeHost;
+import com.facebook.react.soloader.OpenSourceMergedSoMapping;
 import com.facebook.soloader.SoLoader;
 import android.util.Log;
 import java.util.List;
@@ -75,7 +76,7 @@ public class MainApplication extends Application implements ReactApplication {
         // с правильным выравниванием страниц (16KB на Android 15).
         // try-catch здесь обрабатывает только Java-уровневые ошибки (UnsatisfiedLinkError).
         try {
-            SoLoader.init(this, /* native exopackage */ false);
+            SoLoader.init(this, OpenSourceMergedSoMapping.INSTANCE);
             Log.d(TAG, "SoLoader initialized successfully");
         } catch (UnsatisfiedLinkError e) {
             Log.e(TAG, "SoLoader native library loading failed: " + e.getMessage(), e);

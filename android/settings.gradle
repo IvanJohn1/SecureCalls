@@ -1,4 +1,22 @@
+// ═══════════════════════════════════════════════════════════
+// settings.gradle — React Native 0.77.x
+//
+// ПОРЯДОК БЛОКОВ (критично для Gradle 8.8):
+// Gradle 8.8 требует строгой последовательности в settings.gradle:
+//   1. pluginManagement {}
+//   2. plugins {}
+//   3. всё остальное (includeBuild, extensions.configure, include и т.д.)
+//
+// ДВА includeBuild — зачем оба:
+//   pluginManagement.includeBuild → резолвит id("com.facebook.react.settings")
+//   top-level includeBuild        → резолвит classpath("...react-native-gradle-plugin")
+//                                   без версии в корневом build.gradle через
+//                                   composite build substitution.
+// Gradle дедуплицирует их автоматически.
+// ═══════════════════════════════════════════════════════════
+
 pluginManagement {
+    includeBuild('../node_modules/@react-native/gradle-plugin')
     repositories {
         google()
         mavenCentral()
@@ -6,23 +24,23 @@ pluginManagement {
     }
 }
 
-// ═══════════════════════════════════════════════════════════
-// ИСПРАВЛЕНО v8.0.0: Убран dependencyResolutionManagement
-//
-// ПРИЧИНА: dependencyResolutionManagement КОНФЛИКТУЕТ с allprojects { repositories }
-// в build.gradle. Gradle 8.8 при наличии обоих блоков:
-//   1) Тратит время на двойное разрешение зависимостей
-//   2) Печатает "Configuration on demand" и зависает на "Evaluating settings"
-//   3) Некоторые RN native модули не находят свои репозитории
-//
-// Все репозитории определены в build.gradle → allprojects { repositories }
-// Это стандартный паттерн React Native 0.73.x
-// ═══════════════════════════════════════════════════════════
+plugins {
+    id("com.facebook.react.settings")
+}
+
+// ─── Всё ниже — после plugins{}, как требует Gradle 8.8 ───────────────────────
+
+// Резолвит classpath("com.facebook.react:react-native-gradle-plugin") без версии
+// в buildscript{} корневого build.gradle через composite build substitution.
+includeBuild('../node_modules/@react-native/gradle-plugin')
+
+// autolinkLibrariesFromCommand() заменяет applyNativeModulesSettingsGradle().
+// Регистрирует автолинкинг как Gradle-задачу (не синхронно в settings eval),
+// что устраняет зависание на 0%.
+// Полное имя класса обязательно в Groovy DSL.
+extensions.configure(com.facebook.react.ReactSettingsExtension) { ex ->
+    ex.autolinkLibrariesFromCommand()
+}
 
 rootProject.name = 'SecureCallApp'
-
-apply from: file("../node_modules/@react-native-community/cli-platform-android/native_modules.gradle")
-applyNativeModulesSettingsGradle(settings)
-
 include ':app'
-includeBuild('../node_modules/@react-native/gradle-plugin')

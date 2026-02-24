@@ -290,23 +290,32 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     }
 
     /**
-     * FIX: Разбудить экран при входящем звонке
+     * ИСПРАВЛЕНО: Разбудить экран при входящем звонке.
+     *
+     * PowerManager.FULL_WAKE_LOCK устарел с API 17 и НЕ включает экран на Android 10+
+     * (флаги FLAG_KEEP_SCREEN_ON, FLAG_SHOW_WHEN_LOCKED работают только из Activity).
+     *
+     * Правильный подход для сервиса:
+     *  1. PARTIAL_WAKE_LOCK удерживает CPU — достаточно для обработки push.
+     *  2. Показ экрана обеспечивает fullScreenIntent уведомления: система сама
+     *     поднимает Activity поверх lockscreen через setShowWhenLocked/setTurnScreenOn,
+     *     которые уже выставлены в MainActivity.onCreate().
+     *
+     * На Android 10+ ACQUIRE_CAUSES_WAKEUP запрещён для 3rd-party приложений.
      */
     private void wakeScreen() {
         try {
             PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
             if (powerManager != null) {
                 PowerManager.WakeLock wakeLock = powerManager.newWakeLock(
-                        PowerManager.FULL_WAKE_LOCK |
-                                PowerManager.ACQUIRE_CAUSES_WAKEUP |
-                                PowerManager.ON_AFTER_RELEASE,
+                        PowerManager.PARTIAL_WAKE_LOCK,
                         "SecureCall::IncomingCallWake"
                 );
-                wakeLock.acquire(10000); // 10 секунд
-                Log.d(TAG, "✅ Экран разбужен");
+                wakeLock.acquire(10_000L); // 10 секунд — CPU не спит пока FCM обрабатывается
+                Log.d(TAG, "✅ CPU WakeLock активирован (экран разбудит fullScreenIntent)");
             }
         } catch (Exception e) {
-            Log.e(TAG, "❌ Ошибка пробуждения экрана: " + e.getMessage());
+            Log.e(TAG, "❌ Ошибка WakeLock: " + e.getMessage());
         }
     }
 

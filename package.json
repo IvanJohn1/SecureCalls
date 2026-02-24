@@ -8,8 +8,7 @@
     "ios": "react-native run-ios",
     "start": "react-native start",
     "test": "jest",
-    "lint": "eslint .",
-    "postinstall": "node scripts/postinstall.js"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@notifee/react-native": "^7.8.0",
@@ -20,22 +19,23 @@
     "@react-navigation/native-stack": "^6.11.0",
     "@react-navigation/stack": "^6.3.20",
     "react": "18.2.0",
-    "react-native": "0.73.11",
-    "react-native-gesture-handler": "2.16.1",
-    "react-native-reanimated": "3.6.2",
-    "react-native-safe-area-context": "^4.8.2",
-    "react-native-screens": "3.31.1",
-    "react-native-webrtc": "^118.0.0",
+    "react-native": "0.77.3",
+    "react-native-gesture-handler": "^2.22.0",
+    "react-native-reanimated": "3.17.5",
+    "react-native-safe-area-context": "^5.4.0",
+    "react-native-screens": "4.18.0",
+    "react-native-webrtc": "^124.0.7",
     "socket.io-client": "^4.6.1"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
     "@babel/preset-env": "^7.20.0",
     "@babel/runtime": "^7.20.0",
-    "@react-native/babel-preset": "0.73.21",
-    "@react-native/eslint-config": "0.73.2",
-    "@react-native/metro-config": "0.73.5",
-    "@react-native/typescript-config": "0.73.1",
+    "@react-native-community/cli": "15.0.1",
+    "@react-native/babel-preset": "0.77.3",
+    "@react-native/eslint-config": "0.77.3",
+    "@react-native/metro-config": "0.77.3",
+    "@react-native/typescript-config": "0.77.3",
     "@types/react": "^18.2.6",
     "@types/react-test-renderer": "^18.0.0",
     "babel-jest": "^29.6.3",
@@ -47,16 +47,12 @@
   },
   "overrides": {
     "react": "18.2.0",
-    "react-native": "0.73.11",
+    "react-native": "0.77.3",
     "@types/react": "^18.2.6",
-    "react-native-gesture-handler": "2.16.1",
-    "react-native-screens": "3.31.1"
+    "fast-xml-parser": "^5.3.6"
   },
   "engines": {
     "node": ">=18",
     "npm": ">=9.0.0"
-  },
-  "overrides": {
-    "fast-xml-parser": "^5.3.6"
   }
 }

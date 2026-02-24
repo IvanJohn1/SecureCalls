@@ -71,7 +71,12 @@ android {
         
         // ═══════════════════════════════════════════════════════════
         // ИСПРАВЛЕНО: Убраны ndk.abiFilters - используем только splits.abi
+        // ВОЗВРАЩЕНО: Явное указание архитектур необходимо для фикса 
+        // отсутствия libreact_featureflagsjni.so и JNI зависимостей в RN 0.77+
         // ═══════════════════════════════════════════════════════════
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        }
     }
 
     signingConfigs {
@@ -150,12 +155,19 @@ android {
             useLegacyPackaging = true
 
             pickFirsts += [
+                'lib/x86/libc++_shared.so',
+                'lib/x86_64/libc++_shared.so',
+                'lib/armeabi-v7a/libc++_shared.so',
+                'lib/arm64-v8a/libc++_shared.so',
                 '**/libc++_shared.so',
                 '**/libfbjni.so',
-                '**/libjsc.so',
+                // libjsc.so УБРАН из pickFirsts — он уже исключён в resources.excludes ниже.
+                // При hermesEnabled=true JSC не используется вообще.
+                // pickFirsts + excludes на один файл — противоречивые инструкции.
                 '**/libreactnativejni.so',
                 '**/libhermes.so',
                 '**/libwebrtc.so',
+                '**/libreact_featureflagsjni.so'
             ]
 
             keepDebugSymbols += ['**/libhermes.so', '**/libreactnativejni.so']
@@ -205,32 +217,39 @@ dependencies {
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
 
     // ═══════════════════════════════════════════════════════════
-    // КРИТИЧНО: WebRTC конфигурация для Android 15
+    // РУЧНОЕ ПОДКЛЮЧЕНИЕ МОДУЛЕЙ 
     // ═══════════════════════════════════════════════════════════
-    // react-native-webrtc уже содержит все нужные нативные библиотеки WebRTC
     implementation project(':react-native-webrtc')
+    implementation project(':notifee_react-native')
+    implementation project(':react-native-firebase_app')
+    implementation project(':react-native-firebase_messaging')
+    implementation project(':react-native-async-storage_async-storage')
+    implementation project(':react-native-gesture-handler')
+    implementation project(':react-native-reanimated')
+    implementation project(':react-native-safe-area-context')
+    implementation project(':react-native-screens')
 
     // Навигация
     implementation 'androidx.navigation:navigation-fragment-ktx:2.7.7'
     implementation 'androidx.navigation:navigation-ui-ktx:2.7.7'
 
     /**
-     * FIREBASE CONFIGURATION (Android 15 Optimized)
+     * FIREBASE CONFIGURATION
+     *
+     * firebase-bom:34.9.0 УБРАН — react-native-firebase 19.3.0 сам управляет
+     * BOM (32.8.1) через свой Gradle-плагин. Принудительное переопределение
+     * создавало конфликт версий.
+     *
+     * firebase-messaging подключён БЕЗ явной версии — он нужен напрямую в
+     * classpath app-модуля: MyFirebaseMessagingService наследует FirebaseMessagingService,
+     * но project(':react-native-firebase_messaging') использует `implementation`
+     * (не `api`), поэтому его зависимости НЕ видны в app-модуле автоматически.
+     * Версию разрешает BOM, который транзитивно тянет react-native-firebase_app.
      */
-    implementation platform('com.google.firebase:firebase-bom:34.9.0')
     implementation 'com.google.firebase:firebase-messaging'
-    implementation 'com.google.firebase:firebase-analytics'
 }
 
-// Автоматическое подключение модулей из node_modules
-apply from: file("../../node_modules/@react-native-community/cli-platform-android/native_modules.gradle")
-applyNativeModulesAppBuildGradle(project)
-
-// ═══════════════════════════════════════════════════════════
-// КРИТИЧНО: Post-build информация
-// ═══════════════════════════════════════════════════════════
-gradle.projectsEvaluated {
-    tasks.withType(JavaCompile).configureEach {
-        options.compilerArgs << "-Xlint:deprecation"
-    }
-}
+// Блок -Xlint:deprecation УДАЛЁН.
+// Он принудительно включал подробный вывод обо всех deprecated-вызовах
+// во ВСЕХ Java-задачах (включая зависимости), что засоряло лог сборки.
+// Нативные //noinspection и @SuppressWarnings в Java-коде достаточны.

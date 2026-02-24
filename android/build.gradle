@@ -1,35 +1,35 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
+
 buildscript {
     ext {
         buildToolsVersion = "35.0.0"
         minSdkVersion = 24
-        // Android 15 (API 35)
         compileSdkVersion = 35
         targetSdkVersion = 35
         
-        // NDK r27 (Clang 17) — требует postinstall-патч для reanimated 3.6.2
-        // Патч добавляет -Wno-error=vla-cxx-extension и -Wno-error=deprecated-this-capture
-        ndkVersion = "27.2.12479018"
-        kotlinVersion = "1.9.22"
-    } 
+        // Используем NDK r27 (Clang 17) из нового конфига
+        ndkVersion = "27.2.12479018" 
+        
+        // Используем более свежий Kotlin из старого конфига
+        kotlinVersion = "1.9.25"
+    }
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
-        // AGP 8.5.2 підтримує Android 15 та 16KB page size
-        classpath("com.android.tools.build:gradle:8.5.2")
+        // AGP 8.7.2 поддерживает Android 15 и 16KB page size
+        classpath("com.android.tools.build:gradle:8.7.2")
         classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
         
-        // Google Services для Firebase
+        // Самая свежая версия Google Services
         classpath("com.google.gms:google-services:4.4.4")
     }
     
-    // Применяем force strategy на уровне buildscript для всех конфигураций
+    // Решение проблем с BouncyCastle (Java 21 compatibility)
     configurations.all {
         resolutionStrategy {
-            // Принудительно используем BouncyCastle 1.76 без классов Java 21
             force 'org.bouncycastle:bcprov-jdk18on:1.76'
             force 'org.bouncycastle:bcpkix-jdk18on:1.76'
             force 'org.bouncycastle:bcutil-jdk18on:1.76'
@@ -37,37 +37,66 @@ buildscript {
     }
 }
 
-// Обязательный плагин для корректной сборки современных React Native проектов
-apply plugin: "com.facebook.react.rootproject"
+// Закомментировано для использования явного управления версиями
+// apply plugin: "com.facebook.react.rootproject"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// КРИТИЧЕСКИЙ ФИКС ДЛЯ KOTLIN 1.9.x (из вашего старого файла)
+// Исправляет ошибки "Type argument is not within its bounds" в сторонних библиотеках
+// ─────────────────────────────────────────────────────────────────────────────
+subprojects {
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            freeCompilerArgs += [
+                "-XXLanguage:-ProhibitUsingNullableTypeParameterAgainstNotNullAnnotated",
+                "-XXLanguage:-ForbidInferringTypeVariablesIntoEmptyIntersection",
+            ]
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // ИСПРАВЛЕНИЕ ДЛЯ WEBRTC: Принудительное извлечение .so файлов
+    // Это гарантирует, что packagingOptions применяются к sub-project,
+    // решая нативный крэш SIGSEGV на устройствах с 16KB page size.
+    // ═══════════════════════════════════════════════════════════
+    if (project.name == "react-native-webrtc") {
+        afterEvaluate {
+            android {
+                packagingOptions {
+                    jniLibs {
+                        useLegacyPackaging true
+                    }
+                }
+            }
+        }
+    }
+}
 
 allprojects {
     repositories {
-        maven {
-            // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
-            url("$rootDir/../node_modules/react-native/android")
-        }
-        // jsc-android не используется (Hermes включён). Раскомментируйте если переключитесь на JSC:
-        // maven { url("$rootDir/../node_modules/jsc-android/dist") }
-        // Локальный репозиторий Notifee (Критично не терять!)
-        maven {
-            url("$rootDir/../node_modules/@notifee/react-native/android/libs")
-        }
+        // Локальные репозитории для React Native и Notifee
+        maven { url("$rootDir/../node_modules/react-native/android") }
+        maven { url("$rootDir/../node_modules/@notifee/react-native/android/libs") }
+        
         google()
         mavenCentral()
         maven { url 'https://www.jitpack.io' }
     }
     
-    // Применяем force strategy для всех подпроектов
+    // Принудительная стратегия разрешения зависимостей для всех подпроектов
     configurations.all {
         resolutionStrategy {
-            // Принудительно используем BouncyCastle 1.76
+            // Дублируем force для надежности во всех модулях
             force 'org.bouncycastle:bcprov-jdk18on:1.76'
             force 'org.bouncycastle:bcpkix-jdk18on:1.76'
             force 'org.bouncycastle:bcutil-jdk18on:1.76'
             
-            // Фиксируем версии AndroidX Core во избежание конфликтов транзитивных зависимостей
+            // Фиксируем AndroidX Core для предотвращения конфликтов версий
             force 'androidx.core:core:1.12.0'
             force 'androidx.core:core-ktx:1.12.0'
+
+            // ПРИНУДИТЕЛЬНО УКАЗЫВАЕМ ВЕРСИЮ REACT NATIVE ДЛЯ ВСЕХ МОДУЛЕЙ
+            force 'com.facebook.react:react-android:0.77.3'
         }
     }
 }

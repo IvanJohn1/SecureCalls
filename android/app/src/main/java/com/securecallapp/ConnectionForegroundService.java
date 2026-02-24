@@ -92,9 +92,18 @@ public class ConnectionForegroundService extends Service {
             WifiManager wifiManager = (WifiManager) getApplicationContext()
                     .getSystemService(Context.WIFI_SERVICE);
             if (wifiManager != null && wifiLock == null) {
+                // WIFI_MODE_FULL_HIGH_PERF deprecated с API 29, но это единственный
+                // доступный режим для API < 29. На API 29+ используем FULL_LOW_LATENCY.
+                // @SuppressWarnings не работает на выражениях, поэтому подавляем через переменную.
+                @SuppressWarnings("deprecation")
+                int legacyWifiMode = WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+                int wifiMode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                    ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                    : legacyWifiMode;
+
                 wifiLock = wifiManager.createWifiLock(
-                        WifiManager.WIFI_MODE_FULL_HIGH_PERF,
-                        "SecureCall::WiFiLock"
+                    wifiMode,
+                    "SecureCall::WiFiLock"
                 );
                 wifiLock.setReferenceCounted(false);
                 wifiLock.acquire();
