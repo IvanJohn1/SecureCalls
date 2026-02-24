@@ -51,6 +51,17 @@ export default function CallScreen({route, navigation}) {
   const isCleanedUpRef = useRef(false);
   // [NEW v11.0] callId ref: заполняется из params (receiver) или через call_initiated (caller)
   const callIdRef = useRef(initialCallId || null);
+  // [FIX] callStateRef to avoid stale closures in WebRTC/ICE callbacks
+  const callStateRef = useRef('initializing');
+
+  // Helper: update callState + ref atomically, never downgrade from 'connected'
+  const updateCallState = (newState) => {
+    if (callStateRef.current === 'connected' && newState === 'connecting') {
+      return; // never downgrade from connected to connecting
+    }
+    callStateRef.current = newState;
+    setCallState(newState);
+  };
 
   useEffect(() => {
     console.log('═══════════════════════════════════════');
@@ -126,7 +137,7 @@ export default function CallScreen({route, navigation}) {
         // ═══════════════════════════════════════
         console.log('→ Шаг 5: Ожидание принятия звонка...');
         if (!isMountedRef.current) return;
-        setCallState('calling');
+        updateCallState('calling');
         // callId придёт через call_initiated (слушатель настроен выше)
         // Offer будет создан когда придёт call_accepted (см. handleCallAccepted)
       } else {
@@ -134,7 +145,7 @@ export default function CallScreen({route, navigation}) {
         // ПРИНИМАЮЩИЙ: обработать offer
         // ═══════════════════════════════════════
         if (!isMountedRef.current) return;
-        setCallState('connecting');
+        updateCallState('connecting');
 
         if (offer) {
           console.log('→ Шаг 5: Обработка offer из params...');
@@ -193,7 +204,7 @@ export default function CallScreen({route, navigation}) {
       callTimeoutRef.current = null;
     }
     if (!isCleanedUpRef.current) {
-      setCallState('timeout');
+      updateCallState('timeout');
       Alert.alert('Нет ответа', 'Собеседник не отвечает', [
         {text: 'OK', onPress: () => { cleanup(); navigation.goBack(); }},
       ]);
@@ -217,7 +228,7 @@ export default function CallScreen({route, navigation}) {
     try {
       offerSentRef.current = true;
       if (!isMountedRef.current) return;
-      setCallState('connecting');
+      updateCallState('connecting');
 
       // Задержка для стабилизации (receiver должен успеть подготовить PeerConnection)
       await new Promise(resolve => setTimeout(resolve, 800));
@@ -315,7 +326,7 @@ export default function CallScreen({route, navigation}) {
     console.log('═══════════════════════════════════════');
 
     setRemoteStream(stream);
-    setCallState('connected');
+    updateCallState('connected');
 
     // Очистить таймаут
     if (callTimeoutRef.current) {
@@ -336,9 +347,16 @@ export default function CallScreen({route, navigation}) {
     console.log('→ ICE состояние:', state);
 
     if (state === 'connected' || state === 'completed') {
-      // ICE соединение установлено — если ещё нет remote stream, обновим статус
-      if (callState !== 'connected') {
-        console.log('✓ ICE connected, ожидаем remote stream...');
+      // [FIX] ICE connected — set 'connected' state (use ref to avoid stale closure)
+      if (callStateRef.current !== 'connected') {
+        console.log('✓ ICE connected — обновляем статус');
+        updateCallState('connected');
+        // Clear timeout
+        if (callTimeoutRef.current) {
+          clearTimeout(callTimeoutRef.current);
+          callTimeoutRef.current = null;
+        }
+        startCallTimer();
       }
     }
   };
@@ -348,14 +366,15 @@ export default function CallScreen({route, navigation}) {
     console.log('→ Connection состояние:', state);
 
     if (state === 'connecting') {
-      if (callState !== 'connected') {
-        setCallState('connecting');
+      // [FIX] Use ref to check real state — never downgrade from 'connected'
+      if (callStateRef.current !== 'connected') {
+        updateCallState('connecting');
       }
     }
 
-    if (state === 'connected' && callState !== 'connected') {
+    if (state === 'connected' && callStateRef.current !== 'connected') {
       console.log('P2P connected');
-      setCallState('connected');
+      updateCallState('connected');
       // Clear timeout
       if (callTimeoutRef.current) {
         clearTimeout(callTimeoutRef.current);
@@ -395,8 +414,9 @@ export default function CallScreen({route, navigation}) {
     try {
       await WebRTCService.setRemoteAnswer(data.answer);
       console.log('✓ Answer обработан, ожидаем подключение...');
+      // [FIX] Don't downgrade from 'connected' — use updateCallState which guards this
       if (isMountedRef.current) {
-        setCallState('connecting');
+        updateCallState('connecting');
       }
     } catch (error) {
       console.error('✗ Ошибка обработки answer:', error);

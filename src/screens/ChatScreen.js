@@ -137,8 +137,9 @@ export default function ChatScreen({route, navigation}) {
         isMine: msg.from === username,
       }));
 
-      // Store messages in reverse order (newest first) for inverted FlatList
-      setMessages(formattedMessages.reverse());
+      // Server returns messages sorted by timestamp DESC (newest first).
+      // inverted FlatList renders index 0 at the bottom, so newest-first is correct as-is.
+      setMessages(formattedMessages);
       setIsLoadingHistory(false);
     }
   };

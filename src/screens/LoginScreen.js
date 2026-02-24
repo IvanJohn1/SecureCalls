@@ -117,8 +117,8 @@ export default function LoginScreen({navigation}) {
         console.log('[LoginScreen] ✅ Все критичные разрешения получены');
         setPermissionsGranted(true);
         
-        // Android 15+ (API 35+) - USE_FULL_SCREEN_INTENT
-        if (Platform.Version >= 35) {
+        // Android 14+ (API 34+) - USE_FULL_SCREEN_INTENT became a runtime permission
+        if (Platform.Version >= 34) {
           requestFullScreenIntentPermission();
         }
         
@@ -137,23 +137,34 @@ export default function LoginScreen({navigation}) {
   };
 
   /**
-   * НОВОЕ: Запрос разрешения USE_FULL_SCREEN_INTENT для Android 15+
+   * [FIX] Запрос разрешения USE_FULL_SCREEN_INTENT для Android 14+ (API 34+)
+   * - Checks AsyncStorage flag to avoid prompting repeatedly
+   * - Only shows alert once; user can re-trigger from permission banner
    */
   const requestFullScreenIntentPermission = async () => {
-    if (Platform.Version < 35) {
+    if (Platform.Version < 34) {
       return true;
     }
 
-    console.log('[LoginScreen] 📱 Запрос USE_FULL_SCREEN_INTENT (Android 15+)');
+    console.log('[LoginScreen] 📱 Проверка USE_FULL_SCREEN_INTENT (Android 14+)');
 
     try {
-      // Для Android 15+ нужно вручную открыть настройки
+      // Check if we already prompted the user
+      const alreadyPrompted = await AsyncStorage.getItem('fullscreen_intent_prompted');
+      if (alreadyPrompted === 'true') {
+        console.log('[LoginScreen] ✅ USE_FULL_SCREEN_INTENT уже был запрошен ранее, пропускаем');
+        return true;
+      }
+
+      // Mark as prompted so we don't ask again
+      await AsyncStorage.setItem('fullscreen_intent_prompted', 'true');
+
       Alert.alert(
         'Требуется разрешение',
-        'Для показа входящих звонков поверх экрана блокировки необходимо предоставить разрешение "Полноэкранные уведомления".\n\nСейчас откроются настройки приложения.',
+        'Для показа входящих звонков поверх экрана блокировки необходимо предоставить разрешение "Полноэкранные уведомления".\n\nОткройте настройки приложения → Уведомления → Полноэкранные уведомления.',
         [
           {
-            text: 'Отмена',
+            text: 'Позже',
             style: 'cancel',
           },
           {
@@ -164,7 +175,7 @@ export default function LoginScreen({navigation}) {
           },
         ]
       );
-      
+
       return true;
     } catch (error) {
       console.error('[LoginScreen] ❌ Ошибка запроса USE_FULL_SCREEN_INTENT:', error);
