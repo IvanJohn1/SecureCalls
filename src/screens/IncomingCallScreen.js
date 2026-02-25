@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import SocketService from '../services/SocketService';
 import NotificationService from '../services/NotificationService';
+import ConnectionService from '../services/ConnectionService';
 
 const {width} = Dimensions.get('window');
 
@@ -112,6 +113,8 @@ export default function IncomingCallScreen({route, navigation}) {
     if (data.from === from) {
       console.log('Call cancelled by caller');
       NotificationService.cancelAllNotifications();
+      // Release Telecom connection when caller cancels
+      ConnectionService.endTelecomCall();
       navigation.goBack();
     }
   };
@@ -187,6 +190,8 @@ export default function IncomingCallScreen({route, navigation}) {
     try {
       await NotificationService.cancelAllNotifications();
       SocketService.rejectCall(from, callId);
+      // Release Telecom connection on reject
+      ConnectionService.endTelecomCall();
       navigation.goBack();
     } catch (error) {
       console.error('✗ Ошибка отклонения:', error);

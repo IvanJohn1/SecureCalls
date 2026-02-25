@@ -109,6 +109,15 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
     /**
      * КРИТИЧНО: Обработка входящего звонка при закрытом приложении
+     *
+     * Strategy (like Signal/WhatsApp/Telegram):
+     *  1. Report call via TelecomManager → process gets Freecess immunity
+     *  2. Show notification (always — Telecom doesn't show UI for self-managed)
+     *  3. Start HeadlessTask to pre-connect socket
+     *
+     * TelecomManager.addNewIncomingCall() is the key anti-Freecess mechanism:
+     * Android marks the process as handling an active call, preventing
+     * Samsung's FreecessController from freezing it.
      */
     private void handleIncomingCall(Map<String, String> data) {
         String from = data.get("from");
@@ -131,6 +140,42 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         // WAKE экрана для показа уведомления
         wakeScreen();
 
+        // ─── Step 1: Report to Telecom (Freecess immunity) ───
+        boolean telecomSuccess = false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            telecomSuccess = TelecomHelper.reportIncomingCall(this, from, callId, isVideo);
+            if (telecomSuccess) {
+                Log.d(TAG, "✅ Call reported via TelecomManager (Freecess immunity active)");
+            } else {
+                Log.w(TAG, "⚠️ TelecomManager failed, using notification fallback");
+            }
+        }
+
+        // ─── Step 2: Show notification (always — self-managed has no system UI) ───
+        showIncomingCallNotification(from, callId, isVideo);
+
+        // ─── Step 3: Start HeadlessTask to pre-connect socket ───
+        try {
+            Intent taskIntent = new Intent(this, IncomingCallTaskService.class);
+            taskIntent.putExtra("from", from);
+            taskIntent.putExtra("callId", callId != null ? callId : "");
+            taskIntent.putExtra("isVideo", isVideo);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(taskIntent);
+            } else {
+                startService(taskIntent);
+            }
+            Log.d(TAG, "✅ IncomingCallTaskService started");
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Error starting IncomingCallTaskService: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Show the incoming call notification with full-screen intent
+     */
+    private void showIncomingCallNotification(String from, String callId, boolean isVideo) {
         // Intent для открытия приложения по нажатию на уведомление
         Intent intent = new Intent(this, MainActivity.class);
         intent.setAction(Intent.ACTION_MAIN);
@@ -197,23 +242,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         if (notificationManager != null) {
             notificationManager.notify(9999, builder.build());
             Log.d(TAG, "✅ Notification о входящем звонке показан");
-        }
-
-        // Launch Headless JS Task to pre-connect socket in the background
-        try {
-            Intent taskIntent = new Intent(this, IncomingCallTaskService.class);
-            taskIntent.putExtra("from", from);
-            taskIntent.putExtra("callId", callId != null ? callId : "");
-            taskIntent.putExtra("isVideo", isVideo);
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(taskIntent);
-            } else {
-                startService(taskIntent);
-            }
-            Log.d(TAG, "✅ IncomingCallTaskService started");
-        } catch (Exception e) {
-            Log.e(TAG, "❌ Error starting IncomingCallTaskService: " + e.getMessage());
         }
     }
 

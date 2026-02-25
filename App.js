@@ -66,6 +66,9 @@ export default function App() {
       // 5. Ensure foreground service is running if user was logged in
       await ensureServiceRunning();
 
+      // 6. Register PhoneAccount for Telecom API (Samsung Freecess immunity)
+      await registerPhoneAccount();
+
       console.log('[App] ✅ Инициализация завершена');
     } catch (error) {
       console.error('[App] ❌ Ошибка инициализации:', error);
@@ -253,6 +256,25 @@ export default function App() {
       }
     } catch (e) {
       console.warn('[App] Service check failed:', e.message);
+    }
+  };
+
+  /**
+   * Register PhoneAccount with Android Telecom framework.
+   * Gives the app Samsung Freecess immunity during incoming calls.
+   */
+  const registerPhoneAccount = async () => {
+    if (Platform.OS !== 'android') return;
+
+    try {
+      const result = await ConnectionService.registerPhoneAccount();
+      if (result) {
+        console.log('[App] PhoneAccount registered with Telecom');
+      } else {
+        console.warn('[App] PhoneAccount registration failed or not supported');
+      }
+    } catch (e) {
+      console.warn('[App] PhoneAccount registration error:', e.message);
     }
   };
 

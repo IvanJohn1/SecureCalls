@@ -12,6 +12,7 @@ import {RTCView} from 'react-native-webrtc';
 import SocketService from '../services/SocketService';
 import WebRTCService from '../services/WebRTCService';
 import NotificationService from '../services/NotificationService';
+import ConnectionService from '../services/ConnectionService';
 
 const {width, height} = Dimensions.get('window');
 
@@ -500,6 +501,9 @@ export default function CallScreen({route, navigation}) {
 
     cleanupListeners();
     WebRTCService.cleanup();
+
+    // Release Telecom connection (Freecess immunity no longer needed)
+    ConnectionService.endTelecomCall();
 
     if (isMountedRef.current) {
       setLocalStream(null);

@@ -65,6 +65,45 @@ class ConnectionServiceHelper {
       return false;
     }
   }
+
+  /**
+   * Register PhoneAccount with Android Telecom framework.
+   * Gives the app Samsung Freecess immunity during incoming calls.
+   * Must be called at least once (at login / app start).
+   */
+  async registerPhoneAccount() {
+    if (Platform.OS !== 'android') {
+      return true;
+    }
+
+    try {
+      const result = await ConnectionService.registerPhoneAccount();
+      console.log('[ConnectionService] PhoneAccount registered:', result);
+      return result;
+    } catch (error) {
+      console.error('[ConnectionService] registerPhoneAccount error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * End the active Telecom call connection.
+   * Must be called when a call ends to properly release Telecom resources.
+   */
+  async endTelecomCall() {
+    if (Platform.OS !== 'android') {
+      return true;
+    }
+
+    try {
+      const result = await ConnectionService.endTelecomCall();
+      console.log('[ConnectionService] Telecom call ended');
+      return result;
+    } catch (error) {
+      console.error('[ConnectionService] endTelecomCall error:', error);
+      return false;
+    }
+  }
 }
 
 export default new ConnectionServiceHelper();
