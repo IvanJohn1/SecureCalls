@@ -383,6 +383,19 @@ function initSocketHandlers(io, deps) {
                 });
               }
 
+              // [FIX v8.1] Dismiss incoming call notification via FCM push
+              try {
+                const targetUser = await User.findOne({ username: call.to });
+                if (targetUser && targetUser.fcmToken && firebaseService.isReady()) {
+                  await firebaseService.sendCallCancelledNotification(
+                    targetUser.fcmToken,
+                    call.from
+                  );
+                }
+              } catch (e) {
+                console.error('[CallTimeout] Error sending cancel push:', e.message);
+              }
+
               // Удалить из активных звонков
               activeCalls.delete(callId);
             }
@@ -433,6 +446,19 @@ function initSocketHandlers(io, deps) {
 
                 if (call && (call.status === 'push_sent' || call.status === 'calling')) {
                   console.log(`[CallTimeout] ОФФЛАЙН ЗВОНОК НЕ ОТВЕЧЕН - ${callId}`);
+
+                  // [FIX v8.1] Dismiss incoming call notification via FCM push
+                  try {
+                    const targetUser = await User.findOne({ username: call.to });
+                    if (targetUser && targetUser.fcmToken && firebaseService.isReady()) {
+                      await firebaseService.sendCallCancelledNotification(
+                        targetUser.fcmToken,
+                        call.from
+                      );
+                    }
+                  } catch (e) {
+                    console.error('[CallTimeout] Error sending cancel push:', e.message);
+                  }
 
                   // Отправить missed call уведомление
                   await sendMissedCallNotification(call.to, call.from, call.isVideo);

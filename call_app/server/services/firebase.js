@@ -1,17 +1,25 @@
-// services/firebase.js - ИСПРАВЛЕННАЯ ВЕРСИЯ v7.2.1
+// services/firebase.js - ИСПРАВЛЕННАЯ ВЕРСИЯ v7.3.0
 const admin = require('firebase-admin');
 const path = require('path');
 
 /**
  * ═══════════════════════════════════════════════════════════
- * FirebaseService v7.2.1 - КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ
+ * FirebaseService v7.3.0 - КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ
  * ═══════════════════════════════════════════════════════════
- * 
- * КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ v7.2.1:
- * - ✅ Добавлен android.notification для full-screen звонков
+ *
+ * КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ v7.3.0:
+ * - ✅ УБРАН android.notification из incoming_call push — ROOT CAUSE FIX!
+ *     Когда android.notification присутствует, FCM считает сообщение
+ *     "notification message" и при убитом приложении система показывает
+ *     уведомление НАПРЯМУЮ, НЕ вызывая onMessageReceived().
+ *     Без android.notification это чистый DATA MESSAGE и onMessageReceived()
+ *     вызывается ВСЕГДА — даже при убитом приложении. Это критично для
+ *     TelecomManager.addNewIncomingCall() и Samsung Freecess immunity.
+ * - ✅ УБРАН android.notification из message push — тоже data-only
+ *     для корректной обработки в onMessageReceived() (unread badges)
+ * - ✅ Обновлены channelId для missed_calls (v2 — свежий канал)
  * - ✅ Правильные приоритеты для Android/iOS
  * - ✅ Расширенное логирование для отладки
- * - ✅ Обработка всех типов ошибок
  */
 
 class FirebaseService {
@@ -80,13 +88,25 @@ class FirebaseService {
    * ═══════════════════════════════════════════════════════════
    * ВХОДЯЩИЙ ЗВОНОК - КРИТИЧНО ВАЖНАЯ ФУНКЦИЯ
    * ═══════════════════════════════════════════════════════════
-   * 
-   * МАКСИМАЛЬНЫЙ ПРИОРИТЕТ:
-   * - Android: priority: high, notification для full-screen
-   * - iOS: apns-priority: 10, interruption-level: time-sensitive
-   * - DATA MESSAGE + NOTIFICATION для работы в фоне
-   * 
-   * ⚠️ КРИТИЧНО: android.notification ОБЯЗАТЕЛЕН для full-screen!
+   *
+   * ЧИСТЫЙ DATA MESSAGE (без android.notification!)
+   *
+   * ⚠️ КРИТИЧНО: android.notification УБРАН намеренно!
+   * Когда android.notification присутствует, FCM классифицирует
+   * сообщение как "notification message". При убитом приложении
+   * система показывает уведомление НАПРЯМУЮ и НЕ вызывает
+   * onMessageReceived(). Это означает что:
+   *   - TelecomManager.addNewIncomingCall() НЕ вызывается
+   *   - Samsung Freecess immunity НЕ активируется
+   *   - FullScreenIntent НЕ работает
+   *   - App процесс остаётся замороженным
+   *
+   * Без android.notification это чистый DATA MESSAGE:
+   *   - onMessageReceived() вызывается ВСЕГДА (даже при убитом приложении)
+   *   - Java код вызывает TelecomManager.addNewIncomingCall()
+   *   - Samsung Freecess immunity активируется
+   *   - FullScreenIntent notification создаётся в Java коде
+   *   - Экран просыпается и показывает IncomingCallScreen
    */
   async sendIncomingCallPush(fcmToken, fromUsername, isVideo, callId) {
     if (!this.isReady()) {
@@ -106,73 +126,53 @@ class FirebaseService {
 
     try {
       console.log('═══════════════════════════════════════');
-      console.log('[Firebase] ОТПРАВКА PUSH О ЗВОНКЕ');
+      console.log('[Firebase] ОТПРАВКА DATA-ONLY PUSH О ЗВОНКЕ');
       console.log('Кому:', fcmToken.substring(0, 20) + '...');
       console.log('От:', fromUsername);
       console.log('Видео:', isVideo);
+      console.log('CallId:', callId);
       console.log('Время:', new Date().toISOString());
       console.log('═══════════════════════════════════════');
 
       // ═══════════════════════════════════════════════════════════
-      // ИСПРАВЛЕНИЕ v7.2.1: Добавлен android.notification блок
-      // Согласно SERVER_SETUP.md - это КРИТИЧНО для full-screen!
+      // FIX v7.3.0: ЧИСТЫЙ DATA MESSAGE — без notification блока!
+      // Это гарантирует вызов onMessageReceived() при убитом приложении.
       // ═══════════════════════════════════════════════════════════
       const message = {
         token: fcmToken,
-        
-        // DATA PAYLOAD - обрабатывается в фоне
+
+        // DATA-ONLY PAYLOAD — onMessageReceived() вызывается ВСЕГДА
         data: {
           type: 'incoming_call',
           from: fromUsername,
           isVideo: isVideo.toString(),
           callId: callId || '',
           timestamp: Date.now().toString(),
-          priority: 'high',
-          sound: 'default',
         },
-        
+
         android: {
-          // МАКСИМАЛЬНЫЙ приоритет для Android
+          // HIGH priority пробуждает устройство из Doze mode
           priority: 'high',
-          // TTL = 30 секунд для немедленной доставки или отмены
+          // TTL = 30 секунд — звонок не может ждать дольше
           ttl: 30000,
-          
-          // ⚠️ КРИТИЧНО: Notification блок для full-screen!
-          notification: {
-            channelId: 'incoming_calls',
-            priority: 'max',
-            defaultSound: true,
-            defaultVibrateTimings: true,
-            visibility: 'public',
-            
-            // Эти поля помогают с отображением
-            title: isVideo ? '📹 Видеозвонок' : '📞 Звонок',
-            body: `${fromUsername} звонит вам`,
-          },
+          // НЕТ notification блока! Уведомление создаётся в Java коде
+          // через MyFirebaseMessagingService.showIncomingCallNotification()
         },
-        
+
         apns: {
           headers: {
-            // Максимальный приоритет для iOS
             'apns-priority': '10',
-            // Немедленная доставка
             'apns-push-type': 'alert',
           },
           payload: {
             aps: {
-              // Разбудить приложение
               'content-available': 1,
-              // Time-sensitive для iOS 15+
               'interruption-level': 'time-sensitive',
-              // Звук
               sound: 'default',
-              // Категория для actions
               category: 'CALL',
-              // Badge
               badge: 1,
-              // Alert
               alert: {
-                title: isVideo ? '📹 Видеозвонок' : '📞 Звонок',
+                title: isVideo ? 'Видеозвонок' : 'Звонок',
                 body: `${fromUsername} звонит вам`,
               },
             },
@@ -227,6 +227,8 @@ class FirebaseService {
         ? message.substring(0, 1000) + '...' 
         : message;
 
+      // FIX v7.3.0: DATA-ONLY — гарантирует вызов onMessageReceived()
+      // даже при убитом приложении (для корректного unread badge)
       const payload = {
         token: fcmToken,
         data: {
@@ -239,12 +241,7 @@ class FirebaseService {
         android: {
           priority: 'high',
           ttl: 86400000, // 24 часа
-          notification: {
-            channelId: 'messages',
-            title: '💬 Новое сообщение',
-            body: `${fromUsername}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`,
-            defaultSound: true,
-          },
+          // НЕТ notification блока — Java код покажет уведомление сам
         },
         apns: {
           headers: {
@@ -254,7 +251,7 @@ class FirebaseService {
             aps: {
               'content-available': 1,
               alert: {
-                title: '💬 Новое сообщение',
+                title: 'Новое сообщение',
                 body: `${fromUsername}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`,
               },
               sound: 'default',
@@ -306,13 +303,11 @@ class FirebaseService {
       const title = isVideo ? '📵 Пропущенный видеозвонок' : '📵 Пропущенный звонок';
       const body = `От: ${fromUsername}`;
 
-      // Комбинируем notification + data для максимальной доставляемости
+      // FIX v7.3.0: DATA-ONLY для missed_call тоже — чтобы onMessageReceived()
+      // вызывался и на Android, и уведомление создавалось в Java коде
+      // с правильным каналом и heads-up поведением
       const message = {
         token: fcmToken,
-        notification: {
-          title: title,
-          body: body,
-        },
         data: {
           type: 'missed_call',
           from: fromUsername,
@@ -321,15 +316,7 @@ class FirebaseService {
         },
         android: {
           priority: 'high',
-          notification: {
-            sound: 'default',
-            channelId: 'missed_calls',
-            priority: 'high',
-            // Уведомление не исчезнет само
-            sticky: true,
-            // Показать даже в DND режиме
-            visibility: 'public',
-          },
+          // НЕТ notification блока — Java код покажет уведомление
         },
         apns: {
           headers: {

@@ -157,7 +157,7 @@
             
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="incoming_calls"
+            android:value="incoming_calls_v2"
             tools:replace="android:value" />
 
         <meta-data

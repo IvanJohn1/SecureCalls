@@ -53,6 +53,9 @@ export default function HomeScreen({route, navigation}) {
     // Запросить список пользователей
     SocketService.getUsers(true);
 
+    // Загрузить непрочитанные сообщения с сервера
+    SocketService.getUnreadCount();
+
     // Регистрация FCM токена
     registerFCMToken();
 
@@ -148,6 +151,8 @@ export default function HomeScreen({route, navigation}) {
       } else {
         console.log('[HomeScreen] ✅ Уже подключено');
         SocketService.getUsers(true);
+        // Reload unread counts (messages may have arrived while in background)
+        SocketService.getUnreadCount();
       }
     }
 
@@ -164,6 +169,7 @@ export default function HomeScreen({route, navigation}) {
     SocketService.on('reconnecting', handleReconnecting);
     SocketService.on('connect', handleReconnect);
     SocketService.on('new_message', handleNewMessageBadge);
+    SocketService.on('unread_count', handleUnreadCount);
   };
 
   const cleanupSocketListeners = () => {
@@ -176,6 +182,7 @@ export default function HomeScreen({route, navigation}) {
     SocketService.off('reconnecting', handleReconnecting);
     SocketService.off('connect', handleReconnect);
     SocketService.off('new_message', handleNewMessageBadge);
+    SocketService.off('unread_count', handleUnreadCount);
   };
 
   const handleUsersList = usersList => {
@@ -220,6 +227,30 @@ export default function HomeScreen({route, navigation}) {
       ...prev,
       [data.from]: (prev[data.from] || 0) + 1,
     }));
+  };
+
+  /**
+   * Handle unread_count response from server.
+   * Called on mount and reconnect to sync unread badges with database.
+   * Server returns { unread: { senderUsername: count, ... } }
+   */
+  const handleUnreadCount = data => {
+    if (!isMountedRef.current) return;
+    if (!data || !data.unread) return;
+
+    console.log('[HomeScreen] Unread counts from server:', data.unread);
+    setUnreadCounts(prev => {
+      // Merge server counts with any local increments
+      const merged = {...prev};
+      for (const [user, count] of Object.entries(data.unread)) {
+        // Server count is authoritative; local increment is additive for new messages
+        // that arrived while the screen is open
+        if (!merged[user] || merged[user] < count) {
+          merged[user] = count;
+        }
+      }
+      return merged;
+    });
   };
 
   const handleIncomingCall = data => {
@@ -270,6 +301,8 @@ export default function HomeScreen({route, navigation}) {
     setConnectionStatus('connected');
     setReconnectAttempts(0);
     SocketService.getUsers(true);
+    // Reload unread counts from server on reconnect
+    SocketService.getUnreadCount();
   };
 
   /**

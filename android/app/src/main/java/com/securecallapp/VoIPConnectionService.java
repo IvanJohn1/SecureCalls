@@ -38,7 +38,7 @@ import androidx.core.app.NotificationCompat;
 @RequiresApi(api = Build.VERSION_CODES.O)
 public class VoIPConnectionService extends ConnectionService {
     private static final String TAG = "VoIPConnectionSvc";
-    private static final String CHANNEL_ID = "incoming_calls";
+    private static final String CHANNEL_ID = "incoming_calls_v2";
     private static final int NOTIFICATION_ID = 9999;
 
     // Static reference to active connection for the JS bridge

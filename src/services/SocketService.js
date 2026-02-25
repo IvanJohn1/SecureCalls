@@ -774,6 +774,15 @@ class SocketService {
     return true;
   }
 
+  getUnreadCount() {
+    if (!this.socket?.connected) {
+      return false;
+    }
+
+    this.socket.emit('get_unread_count');
+    return true;
+  }
+
   // ═══════════════════════════════════════════════════════════
   // ADMIN
   // ═══════════════════════════════════════════════════════════
