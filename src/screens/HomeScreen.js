@@ -34,10 +34,13 @@ export default function HomeScreen({route, navigation}) {
   const [connectionStatus, setConnectionStatus] = useState('connected');
   const [isLoading, setIsLoading] = useState(true);
   const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const [unreadCounts, setUnreadCounts] = useState({});
 
   const isLoggingOut = useRef(false);
   const isMountedRef = useRef(true);
   const appState = useRef(AppState.currentState);
+  // Track which chat is currently open (null when on HomeScreen)
+  const activeChatRef = useRef(null);
 
   useEffect(() => {
     console.log('[HomeScreen v7.0] 🏠 Вход выполнен:', username);
@@ -56,11 +59,17 @@ export default function HomeScreen({route, navigation}) {
     // Подписаться на изменения состояния приложения
     const subscription = AppState.addEventListener('change', handleAppStateChange);
 
+    // Clear active chat ref when this screen is focused (returned from ChatScreen)
+    const unsubscribeFocus = navigation.addListener('focus', () => {
+      activeChatRef.current = null;
+    });
+
     return () => {
       isMountedRef.current = false;
       cleanupSocketListeners();
       cleanupDeviceEventListeners();
       subscription.remove();
+      unsubscribeFocus();
     };
   }, []);
 
@@ -154,6 +163,7 @@ export default function HomeScreen({route, navigation}) {
     SocketService.on('disconnect', handleDisconnect);
     SocketService.on('reconnecting', handleReconnecting);
     SocketService.on('connect', handleReconnect);
+    SocketService.on('new_message', handleNewMessageBadge);
   };
 
   const cleanupSocketListeners = () => {
@@ -165,6 +175,7 @@ export default function HomeScreen({route, navigation}) {
     SocketService.off('disconnect', handleDisconnect);
     SocketService.off('reconnecting', handleReconnecting);
     SocketService.off('connect', handleReconnect);
+    SocketService.off('new_message', handleNewMessageBadge);
   };
 
   const handleUsersList = usersList => {
@@ -192,6 +203,23 @@ export default function HomeScreen({route, navigation}) {
         user.username === data.username ? {...user, isOnline: false} : user,
       ),
     );
+  };
+
+  /**
+   * Track unread messages per user.
+   * Increments badge when a new message arrives and user is NOT in that chat.
+   */
+  const handleNewMessageBadge = data => {
+    if (!isMountedRef.current) return;
+    if (!data || !data.from) return;
+
+    // Don't count if user is currently in that chat
+    if (activeChatRef.current === data.from) return;
+
+    setUnreadCounts(prev => ({
+      ...prev,
+      [data.from]: (prev[data.from] || 0) + 1,
+    }));
   };
 
   const handleIncomingCall = data => {
@@ -312,16 +340,26 @@ export default function HomeScreen({route, navigation}) {
   };
 
   /**
-   * Открыть чат
+   * Открыть чат — clears unread badge for this user
    */
   const openChat = targetUser => {
-    console.log('[HomeScreen] 💬 Открываем чат с:', targetUser);
-    
+    console.log('[HomeScreen] Открываем чат с:', targetUser);
+
     // Проверка подключения
     if (!SocketService.isConnected()) {
       Alert.alert('Ошибка', 'Нет подключения к серверу');
       return;
     }
+
+    // Clear unread count for this user
+    setUnreadCounts(prev => {
+      const updated = {...prev};
+      delete updated[targetUser];
+      return updated;
+    });
+
+    // Track active chat so new messages don't increment badge
+    activeChatRef.current = targetUser;
 
     navigation.navigate('Chat', {
       username: username,
@@ -331,6 +369,7 @@ export default function HomeScreen({route, navigation}) {
 
   const renderUser = ({item}) => {
     const isOnline = item.isOnline || item.online;
+    const unread = unreadCounts[item.username] || 0;
 
     return (
       <View style={styles.userCard}>
@@ -343,6 +382,14 @@ export default function HomeScreen({route, navigation}) {
             <Text style={styles.avatarText}>
               {item.username.substring(0, 2).toUpperCase()}
             </Text>
+            {/* Unread message badge on avatar */}
+            {unread > 0 && (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadBadgeText}>
+                  {unread > 99 ? '99+' : unread}
+                </Text>
+              </View>
+            )}
           </View>
           <View style={styles.userDetails}>
             <Text style={styles.username}>{item.username}</Text>
@@ -361,6 +408,10 @@ export default function HomeScreen({route, navigation}) {
             style={styles.actionButton}
             onPress={() => openChat(item.username)}>
             <Text style={styles.actionIcon}>💬</Text>
+            {/* Unread badge on chat button */}
+            {unread > 0 && (
+              <View style={styles.actionUnreadDot} />
+            )}
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -604,6 +655,36 @@ const styles = StyleSheet.create({
   },
   actionIcon: {
     fontSize: 22,
+  },
+  unreadBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: '#F44336',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  unreadBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  actionUnreadDot: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#F44336',
+    borderWidth: 1.5,
+    borderColor: '#f0f0f0',
   },
   emptyContainer: {
     flex: 1,

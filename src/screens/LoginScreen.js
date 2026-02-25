@@ -318,11 +318,15 @@ export default function LoginScreen({navigation}) {
 
   /**
    * Попытка автоматического входа
+   *
+   * After successful login, checks for a pending incoming call:
+   * 1. AsyncStorage 'pendingIncomingCall' (set by HeadlessJS task)
+   * 2. If found and fresh (<30s), navigate directly to IncomingCallScreen
    */
   const attemptAutoLogin = async (savedUsername, savedToken) => {
     try {
       console.log('[LoginScreen] 🔄 Попытка автовхода...');
-      
+
       await SocketService.connect();
       await SocketService.authenticateWithToken(savedUsername, savedToken);
 
@@ -330,6 +334,40 @@ export default function LoginScreen({navigation}) {
       await ConnectionService.start();
 
       console.log('[LoginScreen] ✅ Автовход успешен');
+
+      // Check for pending incoming call (set by HeadlessJS IncomingCallTask)
+      try {
+        const pendingCallStr = await AsyncStorage.getItem('pendingIncomingCall');
+        if (pendingCallStr) {
+          const pendingCall = JSON.parse(pendingCallStr);
+          const age = Date.now() - (pendingCall.timestamp || 0);
+
+          // Only use if fresh (within 30 seconds)
+          if (age < 30000 && pendingCall.from) {
+            console.log('[LoginScreen] Pending incoming call found:', pendingCall.from);
+            await AsyncStorage.removeItem('pendingIncomingCall');
+
+            // Navigate to Home first, then immediately to IncomingCall
+            navigation.replace('Home', {username: savedUsername, token: savedToken});
+            // Small delay to let HomeScreen mount and register listeners
+            setTimeout(() => {
+              navigation.navigate('IncomingCall', {
+                from: pendingCall.from,
+                isVideo: pendingCall.isVideo || false,
+                username: savedUsername,
+                callId: pendingCall.callId || null,
+              });
+            }, 500);
+            return;
+          } else {
+            // Stale pending call, clean up
+            await AsyncStorage.removeItem('pendingIncomingCall');
+          }
+        }
+      } catch (e) {
+        console.warn('[LoginScreen] Error checking pending call:', e.message);
+      }
+
       navigation.replace('Home', {username: savedUsername, token: savedToken});
     } catch (error) {
       console.error('[LoginScreen] ❌ Ошибка авто-входа:', error);

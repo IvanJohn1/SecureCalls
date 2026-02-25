@@ -64,77 +64,14 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
     // ВХОДЯЩИЙ ЗВОНОК
     // ═══════════════════════════════════════
     if (data.type === 'incoming_call') {
-      console.log('[FCM BG] 📞 ВХОДЯЩИЙ ЗВОНОК от:', data.from);
-
-      // 1. Создать канал
-      const channelId = await notifee.createChannel({
-        id: 'incoming-calls',
-        name: 'Входящие звонки',
-        importance: AndroidImportance.HIGH,
-        sound: 'default',
-        vibration: true,
-        vibrationPattern: [300, 500, 300, 500],
-      });
-
-      console.log('[FCM BG] Канал создан:', channelId);
-
-      // 2. Show notification with callId for proper accept/reject
-      await notifee.displayNotification({
-        id: `call-${data.from}-${Date.now()}`,
-        title: data.isVideo === 'true'
-          ? 'Входящий видеозвонок'
-          : 'Входящий звонок',
-        body: `${data.from} звонит вам`,
-        android: {
-          channelId: 'incoming-calls',
-          importance: AndroidImportance.HIGH,
-
-          // Full Screen Intent — opens IncomingCallScreen over lock screen
-          fullScreenAction: {
-            id: 'incoming_call',
-            launchActivity: 'default',
-          },
-
-          pressAction: {
-            id: 'default',
-            launchActivity: 'default',
-          },
-
-          actions: [
-            {
-              title: 'Ответить',
-              pressAction: {
-                id: 'answer',
-                launchActivity: 'default',
-              },
-            },
-            {
-              title: 'Отклонить',
-              pressAction: {
-                id: 'reject',
-              },
-            },
-          ],
-
-          ongoing: true,
-          autoCancel: false,
-          category: AndroidCategory.CALL,
-          sound: 'default',
-          loopSound: true,
-          lightUpScreen: true,
-          visibility: 1, // PUBLIC
-        },
-        data: {
-          type: 'incoming_call',
-          from: data.from,
-          isVideo: data.isVideo || 'false',
-          callId: data.callId || '',
-        },
-      });
-
-      console.log('[FCM BG] ✅ Notification показан');
+      // IMPORTANT: Do NOT create a JS notification here.
+      // MyFirebaseMessagingService (Java) already shows a native notification
+      // with FullScreenIntent + CATEGORY_CALL, and VoIPConnectionService
+      // replaces it with an even better one via the Telecom framework.
+      // Creating a second notification from JS causes duplicates.
+      console.log('[FCM BG] incoming_call from:', data.from, '— handled by Java (no JS notification)');
     }
-    
+
     // ═══════════════════════════════════════
     // НОВОЕ СООБЩЕНИЕ
     // ═══════════════════════════════════════

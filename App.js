@@ -9,12 +9,13 @@
  * - Все исправления применены
  */
 
-import React, {useEffect} from 'react';
+import React, {useEffect, useRef} from 'react';
 import {NavigationContainer} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import notifee, {EventType, AndroidImportance} from '@notifee/react-native';
 import messaging from '@react-native-firebase/messaging';
-import {Platform, Alert} from 'react-native';
+import {Platform, Alert, DeviceEventEmitter} from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Screens
 import LoginScreen from './src/screens/LoginScreen';
@@ -36,11 +37,23 @@ console.log('║  APP.JS v7.0 - ФИНАЛ                  ║');
 console.log('╚════════════════════════════════════════╝');
 
 export default function App() {
+  const navigationRef = useRef(null);
+
   useEffect(() => {
     initializeApp();
 
+    // Global listener for incoming call events from native (MainActivity).
+    // This catches the event regardless of which screen is active.
+    // When the app is cold-started from a notification, HomeScreen may not
+    // be mounted yet when the event fires. This global handler ensures
+    // navigation to IncomingCallScreen works from any screen.
+    const incomingCallSub = DeviceEventEmitter.addListener(
+      'incomingCall',
+      handleGlobalIncomingCall,
+    );
+
     return () => {
-      // Cleanup
+      incomingCallSub.remove();
     };
   }, []);
 
@@ -279,6 +292,58 @@ export default function App() {
   };
 
   /**
+   * Global incoming call handler — navigates to IncomingCallScreen
+   * from any screen in the app.
+   *
+   * This is the fallback when the HomeScreen-specific listener isn't
+   * mounted yet (e.g., during cold start from notification).
+   */
+  const handleGlobalIncomingCall = async (data) => {
+    console.log('[App] Global incomingCall event:', data?.from);
+
+    if (!data || !data.from) return;
+
+    // Get username from AsyncStorage (needed for IncomingCallScreen)
+    let savedUsername = null;
+    try {
+      savedUsername = await AsyncStorage.getItem('username');
+    } catch (e) {
+      console.warn('[App] Error reading username:', e.message);
+    }
+
+    if (!savedUsername) {
+      console.warn('[App] No saved username — cannot navigate to IncomingCallScreen');
+      return;
+    }
+
+    const nav = navigationRef.current;
+    if (!nav) {
+      console.warn('[App] Navigation not ready');
+      return;
+    }
+
+    // Check if we're already on IncomingCallScreen to avoid duplicates
+    const currentRoute = nav.getCurrentRoute();
+    if (currentRoute?.name === 'IncomingCall' || currentRoute?.name === 'Call') {
+      console.log('[App] Already on call screen, skipping');
+      return;
+    }
+
+    // If still on Login screen, don't navigate (LoginScreen handles pending calls)
+    if (currentRoute?.name === 'Login') {
+      console.log('[App] Still on Login, LoginScreen will handle pending call');
+      return;
+    }
+
+    nav.navigate('IncomingCall', {
+      from: data.from,
+      isVideo: data.isVideo || false,
+      username: savedUsername,
+      callId: data.callId || null,
+    });
+  };
+
+  /**
    * Обработка нажатия на notification
    */
   const handleNotificationPress = (detail) => {
@@ -334,7 +399,7 @@ export default function App() {
   };
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <Stack.Navigator
         initialRouteName="Login"
         screenOptions={{
