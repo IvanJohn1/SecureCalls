@@ -358,14 +358,18 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
     /**
      * Создание notification channels (Android 8.0+)
-     * FIX: Правильные AudioAttributes для Android 15
+     *
+     * IMPORTANT: Android does not allow upgrading channel importance after creation.
+     * To ensure channels have the correct importance (HIGH for messages), we delete
+     * and recreate them. This is safe — user-modified settings will be reset, but
+     * correct importance is more important than preserving old settings.
      */
     private void createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager notificationManager = getSystemService(NotificationManager.class);
 
             if (notificationManager == null) {
-                Log.e(TAG, "❌ NotificationManager null");
+                Log.e(TAG, "NotificationManager null");
                 return;
             }
 
@@ -376,6 +380,11 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                     .build();
+
+            // Delete old channels to reset importance (Android caches channel settings)
+            notificationManager.deleteNotificationChannel(CHANNEL_ID_CALLS);
+            notificationManager.deleteNotificationChannel(CHANNEL_ID_MESSAGES);
+            notificationManager.deleteNotificationChannel(CHANNEL_ID_MISSED);
 
             // Канал для входящих звонков — IMPORTANCE_HIGH
             NotificationChannel callsChannel = new NotificationChannel(
@@ -398,20 +407,22 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                     NotificationManager.IMPORTANCE_HIGH
             );
             messagesChannel.setDescription("Уведомления о новых сообщениях");
+            messagesChannel.enableVibration(true);
             messagesChannel.setSound(notificationUri, null);
+            messagesChannel.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
             notificationManager.createNotificationChannel(messagesChannel);
 
-            // Канал для пропущенных звонков
+            // Канал для пропущенных звонков — IMPORTANCE_HIGH
             NotificationChannel missedCallsChannel = new NotificationChannel(
                     CHANNEL_ID_MISSED,
                     "Пропущенные звонки",
-                    NotificationManager.IMPORTANCE_DEFAULT
+                    NotificationManager.IMPORTANCE_HIGH
             );
             missedCallsChannel.setDescription("Уведомления о пропущенных звонках");
             missedCallsChannel.setSound(notificationUri, null);
             notificationManager.createNotificationChannel(missedCallsChannel);
 
-            Log.d(TAG, "✅ Notification channels созданы");
+            Log.d(TAG, "Notification channels recreated with correct importance");
         }
     }
 
