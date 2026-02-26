@@ -58,8 +58,9 @@ const IncomingCallTask = async taskData => {
     // Keep the socket alive for 28s (task lifetime is 30s)
     await new Promise(resolve => setTimeout(resolve, 28000));
 
-    // Cleanup stale pending marker
-    await AsyncStorage.removeItem('pendingIncomingCall');
+    // NOTE: Do NOT remove pendingIncomingCall here. LoginScreen will read and
+    // clear it after auto-login. The timestamp allows LoginScreen to check
+    // freshness (< 30s) and discard stale markers.
   } catch (error) {
     console.error('[HeadlessTask] Error:', error.message);
   }
