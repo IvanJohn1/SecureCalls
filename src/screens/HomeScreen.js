@@ -25,6 +25,13 @@ import ConnectionService from '../services/ConnectionService';
  * - Кнопка настроек
  * - Поддержка админа
  * - Улучшенная обработка ошибок
+ * 
+ * ═══════════════════════════════════════════════════════════
+ * ДОПОЛНЕНИЯ v8.0 (резервный механизм):
+ * - Добавлен вызов checkPendingCallFromStorage() в useEffect
+ * - Добавлена функция checkPendingCallFromStorage для обработки звонков,
+ *   сохранённых в AsyncStorage при получении FCM в убитом состоянии
+ * ═══════════════════════════════════════════════════════════
  */
 
 export default function HomeScreen({route, navigation}) {
@@ -49,6 +56,12 @@ export default function HomeScreen({route, navigation}) {
     // Подписаться на события
     setupSocketListeners();
     setupDeviceEventListeners();
+
+    // НОВОЕ v8.0: Резервная проверка AsyncStorage при монтировании.
+    // HeadlessTask (IncomingCallHeadlessTask.js) сохраняет данные звонка
+    // в AsyncStorage['pendingIncomingCall'] при FCM с убитым приложением.
+    // App.js onStateChange — основной механизм. Этот — страховка.
+    checkPendingCallFromStorage();
 
     // Запросить список пользователей
     SocketService.getUsers(true);
@@ -115,6 +128,50 @@ export default function HomeScreen({route, navigation}) {
         username: username,
         callId: data.callId || null,
       });
+    }
+  };
+
+  /**
+   * Резервная проверка AsyncStorage при монтировании HomeScreen.
+   *
+   * КОГДА СРАБАТЫВАЕТ:
+   * Сценарий когда App.js onStateChange не успел или не сработал:
+   * - FCM пришёл, HeadlessTask сохранил pendingIncomingCall в AsyncStorage
+   * - App.js обработал DeviceEvent, но navigate из onStateChange не успел
+   * - HomeScreen монтируется — проверяем AsyncStorage как последний резерв
+   *
+   * ВРЕМЕННОЙ ПОРОГ: 45 секунд — достаточно для холодного старта,
+   * но не слишком долго чтобы показать устаревший звонок.
+   */
+  const checkPendingCallFromStorage = async () => {
+    try {
+      const stored = await AsyncStorage.getItem('pendingIncomingCall');
+      if (!stored) return;
+
+      const pending = JSON.parse(stored);
+      const age = Date.now() - (pending.timestamp || 0);
+
+      console.log('[HomeScreen] pendingIncomingCall found, age:', age, 'ms');
+
+      if (pending.from && age < 45000) {
+        // Сразу удаляем чтобы повторно не показать
+        await AsyncStorage.removeItem('pendingIncomingCall');
+
+        console.log('[HomeScreen] 📲 Доставляем pending call from:', pending.from);
+
+        navigation.navigate('IncomingCall', {
+          from: pending.from,
+          isVideo: pending.isVideo === true || pending.isVideo === 'true',
+          username: username,
+          callId: pending.callId || null,
+        });
+      } else {
+        // Устаревший или без from — удаляем мусор
+        await AsyncStorage.removeItem('pendingIncomingCall');
+        console.log('[HomeScreen] Stale pendingIncomingCall cleared (age:', age, 'ms)');
+      }
+    } catch (e) {
+      console.warn('[HomeScreen] checkPendingCallFromStorage error:', e.message);
     }
   };
 

@@ -15,11 +15,17 @@ import android.util.Log;
 
 /**
  * CallNotificationModule - Показ уведомлений о звонках через Native API
- * 
- * Решает проблему: когда React Native не активен, но Foreground Service работает,
- * и приходит входящий звонок - некому показать IncomingCallScreen.
- * 
- * Этот модуль показывает full-screen notification которое откроет приложение.
+ *
+ * ИСПРАВЛЕНИЕ v2.0:
+ * ─────────────────────────────────────────────────────────────
+ * БАГ: intent.putExtra("isVideo", isVideo) клало Boolean в Intent.
+ *      MainActivity.handleIntent() читает isVideo через extras.getString("isVideo"),
+ *      что возвращает null для Boolean-экстра, а не "true"/"false".
+ *      Результат: isVideo всегда == false, все видеозвонки показываются как аудио.
+ *
+ * ФИКС: String.valueOf(isVideo) → "true" или "false"
+ *       Совместимо с остальным кодом (MyFirebaseMessagingService, VoIPConnectionService).
+ * ─────────────────────────────────────────────────────────────
  */
 public class CallNotificationModule extends ReactContextBaseJavaModule {
     private static final String TAG = "CallNotificationModule";
@@ -39,9 +45,6 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
         return "CallNotificationModule";
     }
 
-    /**
-     * Создать notification channel для звонков
-     */
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
@@ -52,18 +55,15 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
             channel.setDescription("Уведомления о входящих звонках");
             channel.enableVibration(true);
             channel.setVibrationPattern(new long[]{0, 300, 200, 300});
-            
-            NotificationManager notificationManager = 
+
+            NotificationManager notificationManager =
                 reactContext.getSystemService(NotificationManager.class);
             notificationManager.createNotificationChannel(channel);
-            
+
             Log.d(TAG, "✓ Notification channel создан");
         }
     }
 
-    /**
-     * Показать full-screen notification о входящем звонке
-     */
     @ReactMethod
     public void showIncomingCallNotification(String from, boolean isVideo, String callId) {
         Log.d(TAG, "========================================");
@@ -74,7 +74,11 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
         Log.d(TAG, "========================================");
 
         try {
-            // Intent для открытия приложения
+            // FIX v2.0: String.valueOf(isVideo) вместо boolean isVideo
+            // MainActivity.handleIntent() читает через extras.getString("isVideo")
+            // Boolean extras.getString() → null → "true".equals(null) → false (НЕВЕРНО)
+            // String.valueOf(true) → "true" → "true".equals("true") → true (ВЕРНО)
+
             Intent intent = new Intent(reactContext, MainActivity.class);
             intent.setAction(Intent.ACTION_MAIN);
             intent.addCategory(Intent.CATEGORY_LAUNCHER);
@@ -83,7 +87,7 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
                           Intent.FLAG_ACTIVITY_SINGLE_TOP);
             intent.putExtra("type", "incoming_call");
             intent.putExtra("from", from);
-            intent.putExtra("isVideo", isVideo);
+            intent.putExtra("isVideo", String.valueOf(isVideo)); // ← ИСПРАВЛЕНО
             if (callId != null && !callId.isEmpty()) {
                 intent.putExtra("callId", callId);
             }
@@ -95,14 +99,13 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
             );
 
-            // Full-screen intent для показа поверх экрана блокировки
             Intent fullScreenIntent = new Intent(reactContext, MainActivity.class);
             fullScreenIntent.setAction(Intent.ACTION_MAIN);
             fullScreenIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
                                     Intent.FLAG_ACTIVITY_CLEAR_TOP);
             fullScreenIntent.putExtra("type", "incoming_call");
             fullScreenIntent.putExtra("from", from);
-            fullScreenIntent.putExtra("isVideo", isVideo);
+            fullScreenIntent.putExtra("isVideo", String.valueOf(isVideo)); // ← ИСПРАВЛЕНО
             if (callId != null && !callId.isEmpty()) {
                 fullScreenIntent.putExtra("callId", callId);
             }
@@ -114,9 +117,8 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
             );
 
-            // Создать notification
             NotificationCompat.Builder builder = new NotificationCompat.Builder(
-                reactContext, 
+                reactContext,
                 CHANNEL_ID
             )
                 .setSmallIcon(android.R.drawable.ic_menu_call)
@@ -132,8 +134,7 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
                 .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
 
-            // Показать notification
-            NotificationManager notificationManager = 
+            NotificationManager notificationManager =
                 (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
             notificationManager.notify(NOTIFICATION_ID, builder.build());
 
@@ -145,18 +146,13 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
         }
     }
 
-    /**
-     * Отменить notification о звонке
-     */
     @ReactMethod
     public void cancelIncomingCallNotification() {
         Log.d(TAG, "Отмена notification о звонке");
-        
         try {
-            NotificationManager notificationManager = 
+            NotificationManager notificationManager =
                 (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
             notificationManager.cancel(NOTIFICATION_ID);
-            
             Log.d(TAG, "✓ Notification отменен");
         } catch (Exception e) {
             Log.e(TAG, "❌ Ошибка отмены notification: " + e.getMessage());

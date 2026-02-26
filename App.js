@@ -1,12 +1,24 @@
 /**
  * ═══════════════════════════════════════════════════════════
- * App.js - ФИНАЛЬНАЯ ВЕРСИЯ v7.0
+ * App.js - ФИНАЛЬНАЯ ВЕРСИЯ v8.0
  * ═══════════════════════════════════════════════════════════
- * 
- * НОВОЕ:
- * - Добавлены SettingsScreen и AdminPanelScreen
- * - Улучшена навигация
- * - Все исправления применены
+ *
+ * ИСПРАВЛЕНО v8.0:
+ * ─────────────────────────────────────────────────────────
+ * БАГ: handleGlobalIncomingCall при currentRoute='Login' делал return.
+ *      DeviceEventEmitter не хранит события — событие терялось навсегда.
+ *      LoginScreen автологинится → navigate('Home') → HomeScreen монтируется,
+ *      но слушать уже нечего. Звонок пропущен.
+ *
+ * ФИКС:
+ *  1. Модульная переменная _pendingCallForNavigation — хранит данные звонка
+ *     вне React-компонента пока навигация не достигнет HomeScreen.
+ *  2. isNavReady ref — navigate() безопасен только после onReady().
+ *  3. NavigationContainer.onReady() — проверяет pending при инициализации.
+ *  4. NavigationContainer.onStateChange() — срабатывает при каждом переходе.
+ *     Когда LoginScreen делает navigate('Home') → немедленно перенаправляет
+ *     на IncomingCallScreen с сохранёнными данными.
+ * ─────────────────────────────────────────────────────────
  */
 
 import React, {useEffect, useRef} from 'react';
@@ -33,20 +45,39 @@ import ConnectionService from './src/services/ConnectionService';
 const Stack = createNativeStackNavigator();
 
 console.log('╔════════════════════════════════════════╗');
-console.log('║  APP.JS v7.0 - ФИНАЛ                  ║');
+console.log('║  APP.JS v8.0 - COLD START FIX         ║');
 console.log('╚════════════════════════════════════════╝');
+
+/**
+ * Хранилище pending-звонка вне React-компонента.
+ *
+ * Живёт в модульной области видимости — не зависит от lifecycle компонента
+ * и не вызывает ре-рендеров. Сбрасывается после успешной навигации.
+ *
+ * @type {{ data: { from: string, isVideo: any, callId: string|null }, username: string } | null}
+ */
+let _pendingCallForNavigation = null;
 
 export default function App() {
   const navigationRef = useRef(null);
 
+  /**
+   * Флаг: NavigationContainer полностью инициализирован.
+   * navigate() безопасно вызывать ТОЛЬКО после onReady().
+   * Используем ref (не state) — не провоцирует ре-рендер.
+   */
+  const isNavReady = useRef(false);
+
   useEffect(() => {
     initializeApp();
 
-    // Global listener for incoming call events from native (MainActivity).
-    // This catches the event regardless of which screen is active.
-    // When the app is cold-started from a notification, HomeScreen may not
-    // be mounted yet when the event fires. This global handler ensures
-    // navigation to IncomingCallScreen works from any screen.
+    /**
+     * Глобальный слушатель 'incomingCall' от MainActivity (DeviceEventEmitter).
+     *
+     * КРИТИЧНО: Этот слушатель монтируется сразу при старте App.js,
+     * до того как LoginScreen/HomeScreen появятся на экране.
+     * Именно он перехватывает событие при холодном старте из FCM-уведомления.
+     */
     const incomingCallSub = DeviceEventEmitter.addListener(
       'incomingCall',
       handleGlobalIncomingCall,
@@ -57,45 +88,27 @@ export default function App() {
     };
   }, []);
 
-  /**
-   * Инициализация приложения
-   */
+  // ─────────────────────────────────────────────────────────────────────────
+  // ИНИЦИАЛИЗАЦИЯ
+  // ─────────────────────────────────────────────────────────────────────────
+
   const initializeApp = async () => {
-    console.log('[App] 🚀 ИНИЦИАЛИЗАЦИЯ');
-
+    console.log('[App] 🚀 ИНИЦИАЛИЗАЦИЯ v8.0');
     try {
-      // 1. Создать notification каналы
       await createNotificationChannels();
-
-      // 2. Запросить разрешения
       await requestPermissions();
-
-      // 3. Настроить foreground handler
       setupForegroundHandler();
-
-      // 4. Настроить notifee event handlers
       setupNotifeeHandlers();
-
-      // 5. Ensure foreground service is running if user was logged in
       await ensureServiceRunning();
-
-      // 6. Register PhoneAccount for Telecom API (Samsung Freecess immunity)
       await registerPhoneAccount();
-
       console.log('[App] ✅ Инициализация завершена');
     } catch (error) {
       console.error('[App] ❌ Ошибка инициализации:', error);
     }
   };
 
-  /**
-   * Создание notification каналов (КРИТИЧНО!)
-   */
   const createNotificationChannels = async () => {
-    console.log('[App] Создание каналов...');
-
     try {
-      // Канал для входящих звонков
       await notifee.createChannel({
         id: 'incoming-calls',
         name: 'Входящие звонки',
@@ -104,97 +117,58 @@ export default function App() {
         vibration: true,
         vibrationPattern: [300, 500, 300, 500],
       });
-
-      // Канал для сообщений
       await notifee.createChannel({
         id: 'messages',
         name: 'Сообщения',
         importance: AndroidImportance.DEFAULT,
         sound: 'default',
       });
-
-      // Канал для пропущенных звонков
       await notifee.createChannel({
         id: 'missed-calls',
         name: 'Пропущенные звонки',
         importance: AndroidImportance.DEFAULT,
         sound: 'default',
       });
-
       console.log('[App] ✅ Каналы созданы');
     } catch (error) {
       console.error('[App] ❌ Ошибка создания каналов:', error);
     }
   };
 
-  /**
-   * Запрос разрешений
-   */
   const requestPermissions = async () => {
     if (Platform.OS !== 'android') return;
-
     try {
-      console.log('[App] Запрос разрешений FCM...');
-
       const authStatus = await messaging().requestPermission();
       const enabled =
         authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
         authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-
-      if (enabled) {
-        console.log('[App] ✅ FCM разрешения получены');
-      } else {
-        console.warn('[App] ⚠️ FCM разрешения НЕ получены');
-      }
+      console.log('[App]', enabled ? '✅ FCM разрешения получены' : '⚠️ FCM разрешения НЕ получены');
     } catch (error) {
       console.error('[App] ❌ Ошибка запроса разрешений:', error);
     }
   };
 
-  /**
-   * Настройка foreground message handler
-   * (Вызывается когда приложение ОТКРЫТО)
-   */
   const setupForegroundHandler = () => {
-    console.log('[App] Настройка foreground handler...');
-
     const unsubscribe = messaging().onMessage(async remoteMessage => {
-      console.log('════════════════════════════════════════');
-      console.log('[App FG] 📬 PUSH В FOREGROUND');
-      console.log('[App FG] Data:', remoteMessage.data);
-      console.log('════════════════════════════════════════');
-
+      console.log('[App FG] 📬 PUSH В FOREGROUND, data:', remoteMessage.data);
       const {data} = remoteMessage;
-
       if (!data) return;
 
       try {
         if (data.type === 'incoming_call') {
-          console.log('[App FG] Call from:', data.from);
-
-          // Show notification even in foreground
+          // Приложение в foreground — сокет уже подключён, сервер шлёт incoming_call
+          // через сокет. HomeScreen обработает. Показываем уведомление как резерв.
           await notifee.displayNotification({
             id: `call-fg-${data.from}-${Date.now()}`,
-            title: data.isVideo === 'true'
-              ? 'Входящий видеозвонок'
-              : 'Входящий звонок',
+            title: data.isVideo === 'true' ? 'Входящий видеозвонок' : 'Входящий звонок',
             body: `${data.from} звонит вам`,
             android: {
               channelId: 'incoming-calls',
               importance: AndroidImportance.HIGH,
-              fullScreenAction: {
-                id: 'incoming_call',
-                launchActivity: 'default',
-              },
+              fullScreenAction: {id: 'incoming_call', launchActivity: 'default'},
               actions: [
-                {
-                  title: 'Ответить',
-                  pressAction: {id: 'answer', launchActivity: 'default'},
-                },
-                {
-                  title: 'Отклонить',
-                  pressAction: {id: 'reject'},
-                },
+                {title: 'Ответить', pressAction: {id: 'answer', launchActivity: 'default'}},
+                {title: 'Отклонить', pressAction: {id: 'reject'}},
               ],
               ongoing: true,
               category: 'call',
@@ -206,61 +180,35 @@ export default function App() {
               callId: data.callId || '',
             },
           });
-
-          console.log('[App FG] Notification shown');
-        } 
-        else if (data.type === 'message') {
-          console.log('[App FG] 💬 Сообщение от:', data.from);
-
+        } else if (data.type === 'message') {
           await notifee.displayNotification({
             id: `msg-fg-${data.from}-${Date.now()}`,
             title: data.from,
             body: data.message,
-            android: {
-              channelId: 'messages',
-            },
-            data: {
-              type: 'message',
-              from: data.from,
-            },
+            android: {channelId: 'messages'},
+            data: {type: 'message', from: data.from},
           });
-
-          console.log('[App FG] ✅ Сообщение показано');
         }
       } catch (error) {
         console.error('[App FG] ❌ Ошибка:', error);
       }
     });
-
     return unsubscribe;
   };
 
-  /**
-   * Настройка notifee event handlers
-   */
   const setupNotifeeHandlers = () => {
-    console.log('[App] Настройка notifee handlers...');
-
-    // Foreground events
     const unsubscribe = notifee.onForegroundEvent(({type, detail}) => {
-      console.log('[App] Notifee FG event:', type);
-
       if (type === EventType.PRESS) {
         handleNotificationPress(detail);
       } else if (type === EventType.ACTION_PRESS) {
         handleNotificationAction(detail);
       }
     });
-
     return unsubscribe;
   };
 
-  /**
-   * Ensure foreground service is running (auto-restart if killed by system)
-   */
   const ensureServiceRunning = async () => {
     if (Platform.OS !== 'android') return;
-
     try {
       const running = await ConnectionService.isRunning();
       if (!running) {
@@ -272,134 +220,183 @@ export default function App() {
     }
   };
 
-  /**
-   * Register PhoneAccount with Android Telecom framework.
-   * Gives the app Samsung Freecess immunity during incoming calls.
-   */
   const registerPhoneAccount = async () => {
     if (Platform.OS !== 'android') return;
-
     try {
       const result = await ConnectionService.registerPhoneAccount();
-      if (result) {
-        console.log('[App] PhoneAccount registered with Telecom');
-      } else {
-        console.warn('[App] PhoneAccount registration failed or not supported');
-      }
+      console.log('[App] PhoneAccount:', result ? 'registered' : 'failed/not supported');
     } catch (e) {
       console.warn('[App] PhoneAccount registration error:', e.message);
     }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // ОБРАБОТЧИК ВХОДЯЩИХ ЗВОНКОВ — ИСПРАВЛЕН v8.0
+  // ─────────────────────────────────────────────────────────────────────────
+
   /**
-   * Global incoming call handler — navigates to IncomingCallScreen
-   * from any screen in the app.
+   * Выполняет navigate('IncomingCall') когда это безопасно.
    *
-   * This is the fallback when the HomeScreen-specific listener isn't
-   * mounted yet (e.g., during cold start from notification).
+   * Если навигация не готова или мы ещё на LoginScreen — сохраняем данные
+   * в _pendingCallForNavigation. onStateChange подхватит их при переходе на Home.
    */
-  const handleGlobalIncomingCall = async (data) => {
-    console.log('[App] Global incomingCall event:', data?.from);
-
-    if (!data || !data.from) return;
-
-    // Get username from AsyncStorage (needed for IncomingCallScreen)
-    let savedUsername = null;
-    try {
-      savedUsername = await AsyncStorage.getItem('username');
-    } catch (e) {
-      console.warn('[App] Error reading username:', e.message);
-    }
-
-    if (!savedUsername) {
-      console.warn('[App] No saved username — cannot navigate to IncomingCallScreen');
-      return;
-    }
-
+  const navigateToIncomingCall = (callData, username) => {
     const nav = navigationRef.current;
-    if (!nav) {
-      console.warn('[App] Navigation not ready');
+
+    if (!nav || !isNavReady.current) {
+      console.log('[App] Nav not ready — storing pending call');
+      _pendingCallForNavigation = {data: callData, username};
       return;
     }
 
-    // Check if we're already on IncomingCallScreen to avoid duplicates
-    const currentRoute = nav.getCurrentRoute();
-    if (currentRoute?.name === 'IncomingCall' || currentRoute?.name === 'Call') {
-      console.log('[App] Already on call screen, skipping');
+    const routeName = nav.getCurrentRoute()?.name;
+
+    if (routeName === 'IncomingCall' || routeName === 'Call') {
+      console.log('[App] Already on call screen — skipping');
+      _pendingCallForNavigation = null;
       return;
     }
 
-    // If still on Login screen, don't navigate (LoginScreen handles pending calls)
-    if (currentRoute?.name === 'Login') {
-      console.log('[App] Still on Login, LoginScreen will handle pending call');
+    if (routeName === 'Login') {
+      // LoginScreen сделает автологин → navigate('Home').
+      // onStateChange поймает момент и перенаправит на IncomingCall.
+      console.log('[App] Still on Login — storing pending call for onStateChange delivery');
+      _pendingCallForNavigation = {data: callData, username};
       return;
     }
 
+    // Все остальные экраны (Home, Chat, Settings и т.д.) — навигируем немедленно
+    console.log('[App] 📲 Navigating to IncomingCallScreen, from:', callData.from);
+    _pendingCallForNavigation = null;
     nav.navigate('IncomingCall', {
-      from: data.from,
-      isVideo: data.isVideo || false,
-      username: savedUsername,
-      callId: data.callId || null,
+      from: callData.from,
+      isVideo: callData.isVideo === true || callData.isVideo === 'true',
+      username,
+      callId: callData.callId || null,
     });
   };
 
   /**
-   * Обработка нажатия на notification
+   * Глобальный слушатель DeviceEventEmitter 'incomingCall'.
+   *
+   * ИСПРАВЛЕНИЕ v8.0:
+   * Вместо `return` при route='Login' — сохраняем в _pendingCallForNavigation.
+   * onStateChange доставит событие когда LoginScreen завершит автологин.
    */
-  const handleNotificationPress = (detail) => {
-    console.log('[App] 👆 Нажатие на notification');
+  const handleGlobalIncomingCall = async data => {
+    console.log('[App] 📞 Global incomingCall event, from:', data?.from);
 
-    const {notification} = detail;
-    const data = notification?.data || {};
+    if (!data?.from) {
+      console.warn('[App] incomingCall event without from field — ignoring');
+      return;
+    }
 
-    if (data.type === 'incoming_call') {
-      console.log('[App] Открытие входящего звонка');
-      // Навигация обработается автоматически через deep linking
-    } else if (data.type === 'message') {
-      console.log('[App] Открытие чата');
-      // Навигация в чат
+    let username = null;
+    try {
+      username = await AsyncStorage.getItem('username');
+    } catch (e) {
+      console.warn('[App] AsyncStorage read error:', e.message);
+    }
+
+    if (!username) {
+      console.warn('[App] No saved username — cannot navigate to IncomingCallScreen');
+      return;
+    }
+
+    navigateToIncomingCall(data, username);
+  };
+
+  /**
+   * Вызывается при каждом изменении навигационного состояния.
+   *
+   * КЛЮЧЕВОЙ МОМЕНТ v8.0:
+   * Когда LoginScreen делает navigation.replace('Home'), этот колбэк
+   * срабатывает немедленно с route='Home'. Если есть _pendingCallForNavigation —
+   * немедленно навигируем на IncomingCallScreen.
+   *
+   * Цепочка: DeviceEvent → Login (хранение) → Home (onStateChange) → IncomingCall
+   */
+  const handleNavigationStateChange = () => {
+    if (!_pendingCallForNavigation) return;
+
+    const routeName = navigationRef.current?.getCurrentRoute()?.name;
+    console.log('[App] onStateChange, route:', routeName, '| pending call:', !!_pendingCallForNavigation);
+
+    if (routeName === 'Home') {
+      const {data, username} = _pendingCallForNavigation;
+      _pendingCallForNavigation = null;
+
+      console.log('[App] Home reached — delivering pending call to IncomingCallScreen');
+      // Используем requestAnimationFrame чтобы дать навигации стабилизироваться
+      requestAnimationFrame(() => {
+        navigationRef.current?.navigate('IncomingCall', {
+          from: data.from,
+          isVideo: data.isVideo === true || data.isVideo === 'true',
+          username,
+          callId: data.callId || null,
+        });
+      });
     }
   };
 
   /**
-   * Обработка action button
+   * NavigationContainer полностью инициализирован.
+   *
+   * Устанавливаем isNavReady и проверяем: вдруг DeviceEvent уже сработал
+   * до инициализации навигации (редкий, но возможный race condition).
    */
-  const handleNotificationAction = async (detail) => {
-    console.log('[App] 🎬 Action:', detail.pressAction?.id);
+  const handleNavigationReady = () => {
+    console.log('[App] ✅ NavigationContainer ready');
+    isNavReady.current = true;
 
+    if (_pendingCallForNavigation) {
+      console.log('[App] Pending call found on nav ready — delivering...');
+      const {data, username} = _pendingCallForNavigation;
+      navigateToIncomingCall(data, username);
+    }
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ОБРАБОТЧИКИ УВЕДОМЛЕНИЙ
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const handleNotificationPress = detail => {
+    const data = detail.notification?.data || {};
+    if (data.type === 'incoming_call') {
+      console.log('[App] Notification press: incoming_call');
+    } else if (data.type === 'message') {
+      console.log('[App] Notification press: message');
+    }
+  };
+
+  const handleNotificationAction = async detail => {
     const {notification, pressAction} = detail;
     const data = notification?.data || {};
 
     if (pressAction?.id === 'answer') {
-      console.log('[App] Accept call from:', data.from);
-
-      // Cancel notification
       await notifee.cancelNotification(notification?.id);
-
-      // Accept via Socket
       if (SocketService.isConnected()) {
         SocketService.acceptCall(data.from, data.callId);
       }
-    }
-    else if (pressAction?.id === 'reject') {
-      console.log('[App] Reject call from:', data.from);
-
-      // Cancel notification
+    } else if (pressAction?.id === 'reject') {
       await notifee.cancelNotification(notification?.id);
-
-      // Reject via Socket
       if (SocketService.isConnected()) {
         SocketService.rejectCall(data.from, data.callId);
       }
-    } 
-    else if (pressAction?.id === 'call_back') {
-      console.log('[App] 📞 Перезвонить:', data.from);
-      // Инициировать звонок
+    } else if (pressAction?.id === 'call_back') {
+      console.log('[App] Call back:', data.from);
     }
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────────────────
+
   return (
-    <NavigationContainer ref={navigationRef}>
+    <NavigationContainer
+      ref={navigationRef}
+      onReady={handleNavigationReady}
+      onStateChange={handleNavigationStateChange}>
       <Stack.Navigator
         initialRouteName="Login"
         screenOptions={{
@@ -418,8 +415,6 @@ export default function App() {
           }}
         />
         <Stack.Screen name="Chat" component={ChatScreen} />
-        
-        {/* НОВЫЕ ЭКРАНЫ */}
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen name="AdminPanel" component={AdminPanelScreen} />
       </Stack.Navigator>
