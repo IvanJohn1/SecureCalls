@@ -88,6 +88,7 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
         android: {
           channelId: 'incoming-calls',
           importance: AndroidImportance.HIGH,
+          smallIcon: 'ic_launcher',
 
           // Full Screen Intent — opens IncomingCallScreen over lock screen
           fullScreenAction: {
@@ -144,7 +145,7 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
       const channelId = await notifee.createChannel({
         id: 'messages',
         name: 'Сообщения',
-        importance: AndroidImportance.DEFAULT,
+        importance: AndroidImportance.HIGH,
         sound: 'default',
       });
 
@@ -154,7 +155,8 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
         body: data.message || '',
         android: {
           channelId: 'messages',
-          importance: AndroidImportance.DEFAULT,
+          importance: AndroidImportance.HIGH,
+          smallIcon: 'ic_launcher',
           pressAction: {
             id: 'default',
             launchActivity: 'default',

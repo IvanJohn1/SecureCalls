@@ -321,18 +321,41 @@ export default function LoginScreen({navigation}) {
    */
   const attemptAutoLogin = async (savedUsername, savedToken) => {
     try {
-      console.log('[LoginScreen] 🔄 Попытка автовхода...');
-      
+      console.log('[LoginScreen] Попытка автовхода...');
+
       await SocketService.connect();
       await SocketService.authenticateWithToken(savedUsername, savedToken);
 
       // Запустить Foreground Service
       await ConnectionService.start();
 
-      console.log('[LoginScreen] ✅ Автовход успешен');
+      console.log('[LoginScreen] Автовход успешен');
+
+      // Check for pending incoming call (set by HeadlessTask when app was killed)
+      try {
+        const pendingCallStr = await AsyncStorage.getItem('pendingIncomingCall');
+        if (pendingCallStr) {
+          const pendingCall = JSON.parse(pendingCallStr);
+          await AsyncStorage.removeItem('pendingIncomingCall');
+          // Only handle if the pending call is recent (< 60s old)
+          if (pendingCall.from && (Date.now() - pendingCall.timestamp) < 60000) {
+            console.log('[LoginScreen] Found pending incoming call from:', pendingCall.from);
+            navigation.replace('IncomingCall', {
+              from: pendingCall.from,
+              isVideo: pendingCall.isVideo === 'true' || pendingCall.isVideo === true,
+              username: savedUsername,
+              callId: pendingCall.callId || null,
+            });
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('[LoginScreen] Error checking pending call:', e.message);
+      }
+
       navigation.replace('Home', {username: savedUsername, token: savedToken});
     } catch (error) {
-      console.error('[LoginScreen] ❌ Ошибка авто-входа:', error);
+      console.error('[LoginScreen] Ошибка авто-входа:', error);
       await AsyncStorage.clear();
       setIsCheckingAuth(false);
     }
