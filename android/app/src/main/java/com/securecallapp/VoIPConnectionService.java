@@ -19,21 +19,26 @@ import androidx.annotation.RequiresApi;
 import androidx.core.app.NotificationCompat;
 
 /**
- * VoIPConnectionService — Android Telecom framework ConnectionService.
+ * VoIPConnectionService v2.0 — Android Telecom ConnectionService.
  *
- * This is the key component that gives the app immunity from Samsung Freecess
- * and other aggressive battery optimizers. When a call is reported via
- * TelecomManager.addNewIncomingCall(), Android:
+ * ДОБАВЛЕНО v2.0:
+ * ─────────────────────────────────────────────────────────────
+ * onCreateOutgoingConnection() — обработка исходящих звонков через Telecom.
  *
- *  1. Creates an incoming connection through this service
- *  2. Elevates the app's process priority (lowered oom_score_adj)
- *  3. Prevents Freecess from freezing the process
- *  4. Keeps WakeLocks active
- *  5. Grants foreground execution privileges
+ * ПРОБЛЕМА (до v2.0):
+ * Метод не был реализован. HomeScreen инициировал WebRTC напрямую,
+ * минуя Telecom. Android не знал о звонке → Freecess мог убить процесс.
  *
- * CRITICAL: CAPABILITY_SELF_MANAGED means the system does NOT show any call UI.
- * We MUST show a FullScreenIntent notification ourselves to wake the screen
- * and display the incoming call screen.
+ * РЕШЕНИЕ:
+ * Исходящий звонок теперь проходит через TelecomManager.placeCall()
+ * → onCreateOutgoingConnection() → VoIPConnection(isOutgoing=true).
+ * Процесс получает иммунитет Freecess на всё время звонка.
+ *
+ * ДОПОЛНИТЕЛЬНО:
+ * onCreateOutgoingConnectionFailed() — лог ошибки для отладки.
+ * ─────────────────────────────────────────────────────────────
+ *
+ * Логика входящих звонков v1.0 без изменений.
  */
 @RequiresApi(api = Build.VERSION_CODES.O)
 public class VoIPConnectionService extends ConnectionService {
@@ -41,8 +46,11 @@ public class VoIPConnectionService extends ConnectionService {
     private static final String CHANNEL_ID = "incoming_calls_v2";
     private static final int NOTIFICATION_ID = 9999;
 
-    // Static reference to active connection for the JS bridge
     private static VoIPConnection sActiveConnection;
+
+    // ─────────────────────────────────────────────────────────
+    // ВХОДЯЩИЕ ЗВОНКИ
+    // ─────────────────────────────────────────────────────────
 
     @Override
     public Connection onCreateIncomingConnection(
@@ -56,33 +64,79 @@ public class VoIPConnectionService extends ConnectionService {
 
         Log.d(TAG, "onCreateIncomingConnection: from=" + from + " callId=" + callId);
 
-        VoIPConnection connection = new VoIPConnection(this, from, callId, isVideo);
+        VoIPConnection connection = new VoIPConnection(this, from, callId, isVideo, false);
         connection.setRinging();
 
         sActiveConnection = connection;
 
-        // CRITICAL: SELF_MANAGED means no system UI — we must show our own.
-        // This FullScreenIntent notification wakes the screen on locked devices
-        // and shows a heads-up notification on unlocked devices.
-        // Uses the same notification ID (9999) as MyFirebaseMessagingService
-        // to replace the fallback notification with a better one.
+        // SELF_MANAGED = нет системного UI → показываем своё уведомление
         showFullScreenNotification(from, callId, isVideo);
 
         return connection;
     }
 
+    @Override
+    public void onCreateIncomingConnectionFailed(
+            PhoneAccountHandle connectionManagerPhoneAccount,
+            ConnectionRequest request) {
+        Log.e(TAG, "onCreateIncomingConnectionFailed — fallback notification already shown by FCM");
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // ИСХОДЯЩИЕ ЗВОНКИ (NEW v2.0)
+    // ─────────────────────────────────────────────────────────
+
     /**
-     * Show a high-priority notification with FullScreenIntent for the incoming call.
+     * NEW v2.0: Вызывается TelecomManager при placeCall().
      *
-     * This replaces the notification shown by MyFirebaseMessagingService (same ID 9999).
-     * FullScreenIntent is the ONLY way to wake a locked screen and display an Activity
-     * from a background service on Android 10+.
+     * Создаём VoIPConnection в состоянии DIALING.
+     * JS стартует WebRTC в CallScreen параллельно.
+     * Когда удалённая сторона ответит — ConnectionServiceModule.setOutgoingCallActive()
+     * переводит соединение в ACTIVE.
+     *
+     * Для исходящих звонков НЕ показываем FullScreenIntent уведомление —
+     * пользователь сам инициировал звонок и уже видит CallScreen.
      */
+    @Override
+    public Connection onCreateOutgoingConnection(
+            PhoneAccountHandle connectionManagerPhoneAccount,
+            ConnectionRequest request) {
+
+        Bundle extras = request.getExtras();
+        String peer = extras.getString("peer", "Unknown");
+        String callId = extras.getString("callId", "");
+        boolean isVideo = extras.getBoolean("isVideo", false);
+
+        Log.d(TAG, "onCreateOutgoingConnection: peer=" + peer + " callId=" + callId);
+
+        VoIPConnection connection = new VoIPConnection(this, peer, callId, isVideo, true);
+        connection.setDialing();
+
+        sActiveConnection = connection;
+
+        Log.d(TAG, "Outgoing VoIPConnection created (DIALING state), Freecess immunity active");
+        return connection;
+    }
+
+    @Override
+    public void onCreateOutgoingConnectionFailed(
+            PhoneAccountHandle connectionManagerPhoneAccount,
+            ConnectionRequest request) {
+        Bundle extras = request != null ? request.getExtras() : null;
+        String peer = extras != null ? extras.getString("peer", "?") : "?";
+        Log.e(TAG, "onCreateOutgoingConnectionFailed: peer=" + peer
+                + " — Telecom отклонил исходящий звонок (PhoneAccount не зарегистрирован?)");
+        // JS уже на CallScreen — он получит ошибку WebRTC и вернётся сам
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // УВЕДОМЛЕНИЯ (только для входящих)
+    // ─────────────────────────────────────────────────────────
+
     private void showFullScreenNotification(String from, String callId, boolean isVideo) {
         try {
             createNotificationChannel();
 
-            // Content intent: opens app when notification is tapped
             Intent contentIntent = new Intent(this, MainActivity.class);
             contentIntent.setAction(Intent.ACTION_MAIN);
             contentIntent.addCategory(Intent.CATEGORY_LAUNCHER);
@@ -92,15 +146,12 @@ public class VoIPConnectionService extends ConnectionService {
             contentIntent.putExtra("type", "incoming_call");
             contentIntent.putExtra("from", from);
             contentIntent.putExtra("isVideo", String.valueOf(isVideo));
-            if (callId != null) {
-                contentIntent.putExtra("callId", callId);
-            }
+            if (callId != null) contentIntent.putExtra("callId", callId);
 
             PendingIntent contentPendingIntent = PendingIntent.getActivity(
                     this, 0, contentIntent,
                     PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-            // FullScreen intent: wakes screen and shows activity over lock screen
             Intent fullScreenIntent = new Intent(this, MainActivity.class);
             fullScreenIntent.setAction(Intent.ACTION_MAIN);
             fullScreenIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
@@ -108,9 +159,7 @@ public class VoIPConnectionService extends ConnectionService {
             fullScreenIntent.putExtra("type", "incoming_call");
             fullScreenIntent.putExtra("from", from);
             fullScreenIntent.putExtra("isVideo", String.valueOf(isVideo));
-            if (callId != null) {
-                fullScreenIntent.putExtra("callId", callId);
-            }
+            if (callId != null) fullScreenIntent.putExtra("callId", callId);
 
             PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
                     this, 1, fullScreenIntent,
@@ -148,12 +197,9 @@ public class VoIPConnectionService extends ConnectionService {
     private void createNotificationChannel() {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (nm == null) return;
-
-        // Channel may already exist from MyFirebaseMessagingService
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return;
 
         Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
-
         AudioAttributes audioAttributes = new AudioAttributes.Builder()
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
@@ -172,14 +218,9 @@ public class VoIPConnectionService extends ConnectionService {
         nm.createNotificationChannel(channel);
     }
 
-    @Override
-    public void onCreateIncomingConnectionFailed(
-            PhoneAccountHandle connectionManagerPhoneAccount,
-            ConnectionRequest request) {
-        Log.e(TAG, "onCreateIncomingConnectionFailed — falling back to notification");
-        // The notification was already shown by MyFirebaseMessagingService
-        // so the user can still tap it. No additional action needed.
-    }
+    // ─────────────────────────────────────────────────────────
+    // СТАТИЧЕСКИЕ МЕТОДЫ ДЛЯ JS-МОСТА
+    // ─────────────────────────────────────────────────────────
 
     public static VoIPConnection getActiveConnection() {
         return sActiveConnection;

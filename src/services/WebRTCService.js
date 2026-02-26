@@ -6,7 +6,6 @@ import {
 } from 'react-native-webrtc';
 import {SERVER_URL} from '../config/server.config';
 
-// Fallback ICE серверы (STUN-только, используются если сервер недоступен)
 const DEFAULT_ICE_SERVERS = [
   {urls: 'stun:stun.l.google.com:19302'},
   {urls: 'stun:stun1.l.google.com:19302'},
@@ -22,31 +21,31 @@ const BASE_CONFIGURATION = {
 
 /**
  * ═══════════════════════════════════════════════════════════
- * WebRTC Service v10.1 — Signal Architecture
+ * WebRTC Service v10.2 — Glare Condition Fix
  * ═══════════════════════════════════════════════════════════
  *
- * v10.1 fix:
+ * v10.2 fix:
  * ─────────────────────────────────────────────────────────
- * БАГ: fetchIceServers() говорил "Таймаут 5 секунд" в комментарии,
- *      но реального таймаута не было. В React Native fetch() не имеет
- *      встроенного таймаута — при недоступном сервере зависал навсегда,
- *      блокируя инициализацию звонка.
+ * БАГ: createAnswer() при signalingState='have-local-offer' просто
+ *      выводил console.warn, затем падал с InvalidStateError на
+ *      setRemoteDescription() — звонок подвисал молча.
  *
- * ФИКС: AbortController + Promise.race() — реальный 5-секундный таймаут.
+ *      Сценарий: glare condition — два пользователя одновременно
+ *      инициируют звонок друг другу. Один получает offer пока сам
+ *      находится в состоянии 'have-local-offer'.
+ *
+ * ФИКС: RFC 8829 — при 'have-local-offer' выполняем rollback
+ *   await setLocalDescription({type: 'rollback'})
+ *   Это отменяет pending offer, возвращает 'stable',
+ *   после чего setRemoteDescription(offer) проходит нормально.
  * ─────────────────────────────────────────────────────────
  *
- * v10.0 (Signal-inspired):
- * 1. ✅ Динамическая загрузка ICE/TURN конфигурации с сервера
- * 2. ✅ TURN серверы для надёжной работы за NAT (Xiaomi + мобильные сети)
- * 3. ✅ Современный формат видео-ограничений (без legacy mandatory)
- * 4. ✅ cleanup НЕ очищает callbacks
- * 5. ✅ Безопасные null-проверки везде
- * 6. ✅ ICE queue обрабатывается правильно
- * 7. ✅ Проверка signaling state перед setRemoteDescription
+ * v10.1: AbortController для реального таймаута fetchIceServers.
+ * v10.0: Signal-inspired dynamic ICE/TURN loading.
  */
 
 console.log('╔════════════════════════════════════════╗');
-console.log('║  WebRTC v10.1 Signal Architecture     ║');
+console.log('║  WebRTC v10.2 Glare Fix               ║');
 console.log('╚════════════════════════════════════════╝');
 
 class WebRTCService {
@@ -57,39 +56,30 @@ class WebRTCService {
     this.iceCandidatesQueue = [];
     this.callbacks = {};
 
-    // Статусы
     this.isOfferCreated = false;
     this.isAnswerReceived = false;
     this.remoteDescriptionSet = false;
 
-    // Таймауты
     this.connectionTimeout = null;
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 3;
 
-    // ICE конфигурация (загружается с сервера Signal-style)
     this.iceServers = null;
   }
 
   /**
-   * Signal-inspired: загрузка ICE/TURN конфигурации с сервера.
-   *
-   * ИСПРАВЛЕНО v10.1: Реальный 5-секундный таймаут через AbortController.
-   * При недоступном сервере — немедленно используем DEFAULT_ICE_SERVERS,
-   * не блокируем звонок.
+   * Загрузка ICE/TURN конфигурации с сервера.
+   * AbortController обеспечивает реальный 5-секундный таймаут.
    */
   async fetchIceServers() {
-    // AbortController для реального таймаута fetch
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, 5000); // 5 секунд — не блокируем звонок
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     try {
       const response = await fetch(`${SERVER_URL}/webrtc-config`, {
         method: 'GET',
         headers: {'Accept': 'application/json'},
-        signal: controller.signal, // ← реальный таймаут
+        signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
@@ -99,7 +89,7 @@ class WebRTCService {
       const config = await response.json();
       if (config.iceServers && config.iceServers.length > 0) {
         this.iceServers = config.iceServers;
-        console.log('[WebRTC v10.1] ✅ ICE серверы загружены с сервера:', this.iceServers.length);
+        console.log('[WebRTC v10.2] ✅ ICE серверы загружены:', this.iceServers.length);
         return this.iceServers;
       }
 
@@ -108,9 +98,9 @@ class WebRTCService {
       clearTimeout(timeoutId);
 
       if (error.name === 'AbortError') {
-        console.warn('[WebRTC v10.1] ⏰ Таймаут загрузки ICE конфигурации (5s) — используем fallback');
+        console.warn('[WebRTC v10.2] ⏰ Таймаут ICE конфигурации (5s) — используем fallback');
       } else {
-        console.warn('[WebRTC v10.1] ⚠️ Не удалось загрузить ICE конфигурацию:', error.message, '— используем fallback');
+        console.warn('[WebRTC v10.2] ⚠️ ICE config error:', error.message, '— fallback');
       }
 
       this.iceServers = DEFAULT_ICE_SERVERS;
@@ -122,7 +112,7 @@ class WebRTCService {
    * Получение локального медиа потока
    */
   async getLocalStream(isVideo = false) {
-    console.log('[WebRTC v10.1] ПОЛУЧЕНИЕ МЕДИА ПОТОКА, видео:', isVideo);
+    console.log('[WebRTC v10.2] ПОЛУЧЕНИЕ МЕДИА ПОТОКА, видео:', isVideo);
 
     try {
       const constraints = {
@@ -133,12 +123,7 @@ class WebRTCService {
           sampleRate: 48000,
         },
         video: isVideo
-          ? {
-              facingMode: 'user',
-              width: {ideal: 640},
-              height: {ideal: 480},
-              frameRate: {ideal: 30, max: 30},
-            }
+          ? {facingMode: 'user', width: {ideal: 640}, height: {ideal: 480}, frameRate: {ideal: 30, max: 30}}
           : false,
       };
 
@@ -157,19 +142,15 @@ class WebRTCService {
   }
 
   /**
-   * Создание PeerConnection с Signal-style ICE конфигурацией
+   * Создание PeerConnection
    */
   createPeerConnection() {
-    console.log('[WebRTC v10.1] СОЗДАНИЕ PEER CONNECTION');
+    console.log('[WebRTC v10.2] СОЗДАНИЕ PEER CONNECTION');
 
     try {
       if (this.peerConnection) {
         console.log('⚠️ Закрываем старое соединение');
-        try {
-          this.peerConnection.close();
-        } catch (e) {
-          // Игнорируем ошибки закрытия
-        }
+        try { this.peerConnection.close(); } catch (e) {}
         this.peerConnection = null;
       }
 
@@ -197,16 +178,13 @@ class WebRTCService {
       this.setupHandlers();
       this.startConnectionTimeout();
 
-      console.log('✅ PeerConnection создан (v10.1)');
+      console.log('✅ PeerConnection создан (v10.2)');
     } catch (error) {
       console.error('❌ ОШИБКА создания PeerConnection:', error);
       throw error;
     }
   }
 
-  /**
-   * Настройка обработчиков событий
-   */
   setupHandlers() {
     if (!this.peerConnection) return;
 
@@ -242,15 +220,10 @@ class WebRTCService {
           this.clearConnectionTimeout();
           break;
         case 'disconnected':
-          console.log('⚠️ ICE соединение потеряно');
           this.handleDisconnection();
           break;
         case 'failed':
-          console.log('❌ ICE соединение не удалось');
           this.handleConnectionFailure();
-          break;
-        case 'closed':
-          console.log('🔒 ICE соединение закрыто');
           break;
       }
     };
@@ -261,38 +234,23 @@ class WebRTCService {
       console.log('→ Connection состояние:', state);
       this._emit('connectionStateChange', state);
 
-      switch (state) {
-        case 'connected':
-          console.log('✅ P2P соединение установлено');
-          this.clearConnectionTimeout();
-          break;
-        case 'disconnected':
-          console.log('⚠️ P2P соединение потеряно');
-          break;
-        case 'failed':
-          console.log('❌ P2P соединение не удалось');
-          this.handleConnectionFailure();
-          break;
-        case 'closed':
-          console.log('🔒 P2P соединение закрыто');
-          break;
+      if (state === 'connected') {
+        this.clearConnectionTimeout();
+      } else if (state === 'failed') {
+        this.handleConnectionFailure();
       }
     };
 
-    this.peerConnection.onicecandidateerror = () => {
-      // Не логируем — слишком много шума
-    };
+    this.peerConnection.onicecandidateerror = () => {};
   }
 
   /**
    * Создание offer
    */
   async createOffer() {
-    console.log('[WebRTC v10.1] СОЗДАНИЕ OFFER');
+    console.log('[WebRTC v10.2] СОЗДАНИЕ OFFER');
 
-    if (!this.peerConnection) {
-      throw new Error('PeerConnection не создан');
-    }
+    if (!this.peerConnection) throw new Error('PeerConnection не создан');
 
     try {
       const offer = await this.peerConnection.createOffer({
@@ -310,21 +268,40 @@ class WebRTCService {
   }
 
   /**
-   * Создание answer
+   * Создание answer — с обработкой glare condition (RFC 8829).
+   *
+   * [FIX v10.2] Glare condition: оба пользователя одновременно звонят.
+   * Один получает входящий offer пока сам в состоянии 'have-local-offer'.
+   * setRemoteDescription() в этом состоянии бросает InvalidStateError.
+   *
+   * РЕШЕНИЕ (RFC 8829, раздел 5.2):
+   *   Откатываем наш pending offer через setLocalDescription({type: 'rollback'}).
+   *   Это возвращает signalingState → 'stable'.
+   *   Теперь setRemoteDescription(incomingOffer) работает корректно.
+   *   Мы становимся callee, удалённая сторона — caller.
    */
   async createAnswer(offer) {
-    console.log('[WebRTC v10.1] СОЗДАНИЕ ANSWER');
+    console.log('[WebRTC v10.2] СОЗДАНИЕ ANSWER');
 
-    if (!this.peerConnection) {
-      throw new Error('PeerConnection не создан');
-    }
+    if (!this.peerConnection) throw new Error('PeerConnection не создан');
 
     try {
       const signalingState = this.peerConnection.signalingState;
       console.log('→ Текущий signalingState:', signalingState);
 
-      if (signalingState !== 'stable' && signalingState !== 'have-local-offer') {
-        console.warn('⚠️ Неожиданный signalingState:', signalingState);
+      // [FIX v10.2] Glare condition — откатываем наш pending offer
+      if (signalingState === 'have-local-offer') {
+        console.warn('⚠️ Glare condition: have-local-offer, выполняем rollback (RFC 8829)');
+        try {
+          await this.peerConnection.setLocalDescription({type: 'rollback'});
+          console.log('→ Rollback выполнен, signalingState:', this.peerConnection.signalingState);
+        } catch (rollbackError) {
+          console.error('❌ Rollback failed:', rollbackError.message);
+          throw rollbackError;
+        }
+      } else if (signalingState !== 'stable') {
+        // Другое неожиданное состояние — логируем, но пробуем продолжить
+        console.warn('⚠️ Неожиданный signalingState перед setRemoteDescription:', signalingState);
       }
 
       const remoteDesc = new RTCSessionDescription(offer);
@@ -348,11 +325,9 @@ class WebRTCService {
    * Установка удалённого answer
    */
   async setRemoteAnswer(answer) {
-    console.log('[WebRTC v10.1] УСТАНОВКА ANSWER');
+    console.log('[WebRTC v10.2] УСТАНОВКА ANSWER');
 
-    if (!this.peerConnection) {
-      throw new Error('PeerConnection не создан');
-    }
+    if (!this.peerConnection) throw new Error('PeerConnection не создан');
 
     try {
       const signalingState = this.peerConnection.signalingState;
@@ -400,9 +375,6 @@ class WebRTCService {
     }
   }
 
-  /**
-   * Обработка очереди ICE candidates
-   */
   async _processIceCandidatesQueue() {
     if (this.iceCandidatesQueue.length === 0) return;
     console.log(`→ Обработка ${this.iceCandidatesQueue.length} ICE candidates из очереди`);
@@ -417,13 +389,10 @@ class WebRTCService {
     console.log('✅ Очередь ICE candidates обработана');
   }
 
-  /**
-   * Таймаут установки соединения
-   */
   startConnectionTimeout() {
     this.clearConnectionTimeout();
     this.connectionTimeout = setTimeout(() => {
-      console.log('⏰ Таймаут установки WebRTC соединения (60 сек)');
+      console.log('⏰ Таймаут WebRTC соединения (60 сек)');
       this._emit('connectionTimeout');
     }, 60000);
   }
@@ -435,19 +404,12 @@ class WebRTCService {
     }
   }
 
-  /**
-   * Обработка потери соединения — пытаемся ICE restart
-   */
   handleDisconnection() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
       console.log(`🔄 Попытка восстановления ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
       if (this.peerConnection) {
-        try {
-          this.peerConnection.restartIce();
-        } catch (e) {
-          console.warn('⚠️ ICE restart не удался:', e.message);
-        }
+        try { this.peerConnection.restartIce(); } catch (e) {}
       }
     } else {
       console.log('❌ Превышено количество попыток восстановления');
@@ -460,60 +422,40 @@ class WebRTCService {
     this._emit('connectionFailed');
   }
 
-  // ═══════════════════════════════════════
-  // Управление медиа
-  // ═══════════════════════════════════════
-
   switchCamera() {
     if (!this.localStream) return;
     const videoTrack = this.localStream.getVideoTracks()[0];
     if (videoTrack && videoTrack._switchCamera) {
       videoTrack._switchCamera();
-      console.log('→ Камера переключена');
     }
   }
 
   toggleMicrophone(enabled) {
     if (!this.localStream) return;
     const audioTrack = this.localStream.getAudioTracks()[0];
-    if (audioTrack) {
-      audioTrack.enabled = enabled;
-      console.log('→ Микрофон:', enabled ? 'ВКЛ' : 'ВЫКЛ');
-    }
+    if (audioTrack) audioTrack.enabled = enabled;
   }
 
   toggleCamera(enabled) {
     if (!this.localStream) return;
     const videoTrack = this.localStream.getVideoTracks()[0];
-    if (videoTrack) {
-      videoTrack.enabled = enabled;
-      console.log('→ Видео:', enabled ? 'ВКЛ' : 'ВЫКЛ');
-    }
+    if (videoTrack) videoTrack.enabled = enabled;
   }
 
   /**
-   * Полная очистка.
-   * FIX: НЕ очищаем callbacks — это делает off()
+   * Полная очистка. НЕ очищаем callbacks — это делает off().
    */
   cleanup() {
-    console.log('[WebRTC v10.1] ОЧИСТКА');
+    console.log('[WebRTC v10.2] ОЧИСТКА');
     this.clearConnectionTimeout();
 
     if (this.localStream) {
-      try {
-        this.localStream.getTracks().forEach(track => track.stop());
-      } catch (e) {
-        // Игнорируем
-      }
+      try { this.localStream.getTracks().forEach(t => t.stop()); } catch (e) {}
       this.localStream = null;
     }
 
     if (this.peerConnection) {
-      try {
-        this.peerConnection.close();
-      } catch (e) {
-        // Игнорируем
-      }
+      try { this.peerConnection.close(); } catch (e) {}
       this.peerConnection = null;
     }
 
@@ -525,36 +467,26 @@ class WebRTCService {
     this.reconnectAttempts = 0;
     this.iceServers = null;
 
-    console.log('✅ Очистка завершена (v10.1)');
+    console.log('✅ Очистка завершена (v10.2)');
   }
 
-  // ═══════════════════════════════════════
-  // Управление событиями
-  // ═══════════════════════════════════════
-
   on(event, callback) {
-    if (!this.callbacks[event]) {
-      this.callbacks[event] = [];
-    }
+    if (!this.callbacks[event]) this.callbacks[event] = [];
     this.callbacks[event].push(callback);
   }
 
   off(event, callback) {
     if (!this.callbacks[event]) return;
-    const index = this.callbacks[event].indexOf(callback);
-    if (index > -1) {
-      this.callbacks[event].splice(index, 1);
-    }
+    const idx = this.callbacks[event].indexOf(callback);
+    if (idx > -1) this.callbacks[event].splice(idx, 1);
   }
 
   _emit(event, data) {
     if (!this.callbacks[event]) return;
     const cbs = [...this.callbacks[event]];
-    cbs.forEach(callback => {
-      try {
-        callback(data);
-      } catch (error) {
-        console.error(`[WebRTC] Ошибка в callback ${event}:`, error);
+    cbs.forEach(cb => {
+      try { cb(data); } catch (e) {
+        console.error(`[WebRTC] Ошибка в callback ${event}:`, e);
       }
     });
   }

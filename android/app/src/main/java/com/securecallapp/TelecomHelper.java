@@ -2,6 +2,7 @@ package com.securecallapp;
 
 import android.content.ComponentName;
 import android.content.Context;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.telecom.PhoneAccount;
@@ -10,17 +11,26 @@ import android.telecom.TelecomManager;
 import android.util.Log;
 
 /**
- * TelecomHelper — utility class for Android Telecom API integration.
+ * TelecomHelper v2.0 — утилита для Android Telecom API.
  *
- * Manages PhoneAccount registration and incoming call reporting.
- * Uses CAPABILITY_SELF_MANAGED which is designed for VoIP apps that
- * handle their own call UI (like Signal, WhatsApp, Telegram).
+ * ДОБАВЛЕНО v2.0:
+ * ─────────────────────────────────────────────────────────────
+ * placeOutgoingCall() — регистрация исходящего звонка в Telecom.
  *
- * Self-managed PhoneAccounts:
- *  - Auto-enabled (no user action needed)
- *  - Don't interfere with the default dialer
- *  - Provide process priority elevation during calls
- *  - Prevent Samsung Freecess from freezing the app during calls
+ * ПРОБЛЕМА (до v2.0):
+ * Исходящие звонки никогда не регистрировались в TelecomManager.
+ * Android не знал, что приложение ведёт звонок.
+ * Samsung Freecess мог убить процесс во время разговора,
+ * так как сессия не была защищена Telecom.
+ *
+ * РЕШЕНИЕ:
+ * HomeScreen.makeCall() теперь вызывает ConnectionService.placeCall(),
+ * который вызывает TelecomHelper.placeOutgoingCall().
+ * Это триггерит VoIPConnectionService.onCreateOutgoingConnection(),
+ * что переводит процесс в защищённое состояние — как у Signal/WhatsApp.
+ * ─────────────────────────────────────────────────────────────
+ *
+ * Остальная логика v1.0 без изменений.
  */
 public class TelecomHelper {
     private static final String TAG = "TelecomHelper";
@@ -43,10 +53,9 @@ public class TelecomHelper {
 
     /**
      * Register the PhoneAccount with TelecomManager.
-     * Must be called at least once (typically at app startup / login).
      * Safe to call multiple times — TelecomManager handles idempotency.
      *
-     * @return true if registration succeeded, false if Telecom API unavailable
+     * @return true if registration succeeded
      */
     public static boolean registerPhoneAccount(Context context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
@@ -82,11 +91,9 @@ public class TelecomHelper {
 
     /**
      * Report an incoming call to the Android Telecom framework.
+     * Gives the app Samsung Freecess immunity.
      *
-     * This is what gives the app Samsung Freecess immunity:
-     * Android marks the process as handling an active call.
-     *
-     * @return true if call was reported via Telecom, false if fallback needed
+     * @return true if call was reported via Telecom
      */
     public static boolean reportIncomingCall(
             Context context, String from, String callId, boolean isVideo) {
@@ -104,9 +111,7 @@ public class TelecomHelper {
                 return false;
             }
 
-            // Always re-register PhoneAccount — the sRegistered flag may be stale
-            // after device reboot, battery optimization change, or OEM-specific revocation.
-            // TelecomManager.registerPhoneAccount() is idempotent, so this is safe.
+            // Always re-register PhoneAccount — sRegistered may be stale after reboot.
             registerPhoneAccount(context);
 
             PhoneAccountHandle handle = getPhoneAccountHandle(context);
@@ -126,6 +131,70 @@ public class TelecomHelper {
             return false;
         } catch (Exception e) {
             Log.e(TAG, "Failed to report incoming call: " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * NEW v2.0: Place an outgoing call via Android Telecom framework.
+     *
+     * Регистрирует исходящий звонок в TelecomManager. Это даёт приложению
+     * иммунитет от Samsung Freecess во время исходящего звонка — точно так же
+     * как Signal, WhatsApp, Telegram защищают свои исходящие звонки.
+     *
+     * Поток:
+     * 1. HomeScreen → ConnectionServiceModule.placeCall()
+     * 2. ConnectionServiceModule → TelecomHelper.placeOutgoingCall()
+     * 3. TelecomManager → VoIPConnectionService.onCreateOutgoingConnection()
+     * 4. VoIPConnection создан в DIALING состоянии
+     * 5. JS начинает WebRTC (в CallScreen)
+     *
+     * @param context  контекст
+     * @param peer     имя/адрес вызываемого абонента
+     * @param callId   идентификатор звонка (может быть null до получения от сервера)
+     * @param isVideo  видеозвонок
+     * @return true если вызов успешно передан Telecom
+     */
+    public static boolean placeOutgoingCall(
+            Context context, String peer, String callId, boolean isVideo) {
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            Log.w(TAG, "Telecom API not available on API < 26");
+            return false;
+        }
+
+        try {
+            TelecomManager telecomManager = (TelecomManager)
+                    context.getSystemService(Context.TELECOM_SERVICE);
+            if (telecomManager == null) {
+                Log.e(TAG, "TelecomManager is null");
+                return false;
+            }
+
+            // Всегда регистрируем PhoneAccount перед звонком
+            registerPhoneAccount(context);
+
+            PhoneAccountHandle handle = getPhoneAccountHandle(context);
+
+            Bundle extras = new Bundle();
+            extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle);
+            extras.putString("peer", peer);
+            extras.putString("callId", callId != null ? callId : "");
+            extras.putBoolean("isVideo", isVideo);
+            extras.putBoolean("isOutgoing", true);
+
+            // URI в формате sip:peer@securecall
+            Uri callUri = Uri.fromParts(PhoneAccount.SCHEME_SIP, peer, null);
+
+            telecomManager.placeCall(callUri, extras);
+
+            Log.d(TAG, "Outgoing call placed via TelecomManager: peer=" + peer);
+            return true;
+        } catch (SecurityException e) {
+            Log.e(TAG, "SecurityException placing call (MANAGE_OWN_CALLS missing?): " + e.getMessage());
+            return false;
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to place outgoing call: " + e.getMessage());
             return false;
         }
     }

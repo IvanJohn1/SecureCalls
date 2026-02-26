@@ -8,13 +8,25 @@ import android.os.Build;
 import android.util.Log;
 
 /**
- * ConnectionServiceModule - Native Module для управления Foreground Service
- * и Android Telecom API (VoIP ConnectionService).
+ * ConnectionServiceModule v2.0
  *
- * Позволяет JavaScript коду:
- *  - Управлять ConnectionForegroundService (keepalive)
- *  - Регистрировать PhoneAccount для Telecom API (Freecess immunity)
- *  - Завершать звонки через Telecom framework
+ * ДОБАВЛЕНО v2.0:
+ * ─────────────────────────────────────────────────────────────
+ * placeCall(peer, isVideo, promise) — регистрация исходящего звонка в Telecom.
+ *
+ * setOutgoingCallActive(promise) — перевод исходящего звонка в ACTIVE
+ *   когда удалённая сторона ответила.
+ *
+ * ПРОБЛЕМА (до v2.0):
+ * Исходящие звонки не регистрировались в TelecomManager.
+ * HomeScreen.makeCall() шёл напрямую в WebRTC, минуя Telecom.
+ * Android не знал о звонке → Samsung Freecess мог убить процесс.
+ *
+ * РЕШЕНИЕ:
+ * HomeScreen.makeCall() теперь вызывает ConnectionService.placeCall()
+ * перед навигацией на CallScreen. Telecom регистрирует звонок,
+ * VoIPConnectionService создаёт VoIPConnection в DIALING состоянии.
+ * ─────────────────────────────────────────────────────────────
  */
 public class ConnectionServiceModule extends ReactContextBaseJavaModule {
     private static final String TAG = "ConnectionServiceModule";
@@ -30,9 +42,6 @@ public class ConnectionServiceModule extends ReactContextBaseJavaModule {
         return "ConnectionService";
     }
 
-    /**
-     * Запустить Foreground Service
-     */
     @ReactMethod
     public void start(Promise promise) {
         try {
@@ -45,9 +54,6 @@ public class ConnectionServiceModule extends ReactContextBaseJavaModule {
         }
     }
 
-    /**
-     * Остановить Foreground Service
-     */
     @ReactMethod
     public void stop(Promise promise) {
         try {
@@ -60,9 +66,6 @@ public class ConnectionServiceModule extends ReactContextBaseJavaModule {
         }
     }
 
-    /**
-     * Проверить, запущен ли сервис — реальная проверка через ActivityManager
-     */
     @ReactMethod
     @SuppressWarnings("deprecation")
     public void isRunning(Promise promise) {
@@ -87,11 +90,6 @@ public class ConnectionServiceModule extends ReactContextBaseJavaModule {
         }
     }
 
-    /**
-     * Register PhoneAccount with Android Telecom framework.
-     * Gives the app immunity from Samsung Freecess during incoming calls.
-     * Must be called at least once (at login / app start).
-     */
     @ReactMethod
     public void registerPhoneAccount(Promise promise) {
         try {
@@ -108,10 +106,6 @@ public class ConnectionServiceModule extends ReactContextBaseJavaModule {
         }
     }
 
-    /**
-     * End the active Telecom call connection.
-     * Must be called when a call ends to properly release Telecom resources.
-     */
     @ReactMethod
     public void endTelecomCall(Promise promise) {
         try {
@@ -119,6 +113,64 @@ public class ConnectionServiceModule extends ReactContextBaseJavaModule {
             promise.resolve(true);
         } catch (Exception e) {
             Log.e(TAG, "Error ending Telecom call: " + e.getMessage());
+            promise.reject("TELECOM_ERROR", e.getMessage(), e);
+        }
+    }
+
+    /**
+     * NEW v2.0: Разместить исходящий звонок через Android Telecom.
+     *
+     * Вызывается из HomeScreen.makeCall() ПЕРЕД навигацией на CallScreen.
+     * Регистрирует звонок в TelecomManager → процесс получает
+     * иммунитет от Samsung Freecess на время звонка.
+     *
+     * @param peer    имя вызываемого пользователя
+     * @param isVideo true для видеозвонка
+     */
+    @ReactMethod
+    public void placeCall(String peer, boolean isVideo, Promise promise) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                // API < 26: Telecom self-managed не поддерживается, продолжаем без него
+                Log.w(TAG, "placeCall: API < 26, Telecom unavailable — continuing without it");
+                promise.resolve(false);
+                return;
+            }
+
+            boolean success = TelecomHelper.placeOutgoingCall(reactContext, peer, null, isVideo);
+            Log.d(TAG, "placeCall(" + peer + ", video=" + isVideo + "): " + (success ? "OK" : "FAILED"));
+            promise.resolve(success);
+        } catch (Exception e) {
+            Log.e(TAG, "Error placing call: " + e.getMessage());
+            // Не отвергаем промис — JS должен продолжить звонок даже без Telecom
+            promise.resolve(false);
+        }
+    }
+
+    /**
+     * NEW v2.0: Перевести активное исходящее соединение в ACTIVE состояние.
+     *
+     * Вызывается из CallScreen когда удалённая сторона ответила на звонок
+     * (получен webrtc_answer или accept_call от сервера).
+     */
+    @ReactMethod
+    public void setOutgoingCallActive(Promise promise) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                promise.resolve(false);
+                return;
+            }
+            VoIPConnection conn = VoIPConnectionService.getActiveConnection();
+            if (conn != null && conn.getIsOutgoing()) {
+                conn.setCallActive();
+                Log.d(TAG, "Outgoing call set ACTIVE");
+                promise.resolve(true);
+            } else {
+                Log.w(TAG, "setOutgoingCallActive: no active outgoing connection found");
+                promise.resolve(false);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error setting call active: " + e.getMessage());
             promise.reject("TELECOM_ERROR", e.getMessage(), e);
         }
     }

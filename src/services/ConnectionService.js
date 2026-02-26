@@ -3,14 +3,22 @@ import {NativeModules, Platform} from 'react-native';
 const {ConnectionService} = NativeModules;
 
 /**
- * ConnectionServiceHelper - обертка для управления Foreground Service
- * 
- * Позволяет поддерживать соединение активным в фоне для получения входящих звонков
+ * ConnectionServiceHelper - обёртка для управления Foreground Service и Telecom API
+ *
+ * ДОБАВЛЕНО v2.0:
+ * ─────────────────────────────────────────────────────────
+ * placeCall(peer, isVideo) — регистрирует ИСХОДЯЩИЙ звонок через
+ *   TelecomManager.placeCall() → VoIPConnectionService.onCreateOutgoingConnection().
+ *   Даёт процессу Freecess immunity на время исходящего звонка.
+ *   Вызывается из HomeScreen.makeCall() ПЕРЕД navigate('Call').
+ *
+ * setOutgoingCallActive() — переводит исходящий VoIPConnection в ACTIVE.
+ *   Вызывается из CallScreen когда удалённая сторона ответила (handleAnswer).
+ * ─────────────────────────────────────────────────────────
  */
 class ConnectionServiceHelper {
   /**
    * Запустить Foreground Service
-   * Вызывается при успешном логине
    */
   async start() {
     if (Platform.OS !== 'android') {
@@ -25,19 +33,15 @@ class ConnectionServiceHelper {
       return result;
     } catch (error) {
       console.error('[ConnectionService] ❌ Ошибка запуска:', error);
-      // Не выбрасываем ошибку - приложение должно работать даже без foreground service
       return false;
     }
   }
 
   /**
    * Остановить Foreground Service
-   * Вызывается при logout
    */
   async stop() {
-    if (Platform.OS !== 'android') {
-      return true;
-    }
+    if (Platform.OS !== 'android') return true;
 
     try {
       console.log('[ConnectionService] ⏹️ Остановка Foreground Service');
@@ -54,9 +58,7 @@ class ConnectionServiceHelper {
    * Проверить, запущен ли сервис
    */
   async isRunning() {
-    if (Platform.OS !== 'android') {
-      return false;
-    }
+    if (Platform.OS !== 'android') return false;
 
     try {
       return await ConnectionService.isRunning();
@@ -68,13 +70,10 @@ class ConnectionServiceHelper {
 
   /**
    * Register PhoneAccount with Android Telecom framework.
-   * Gives the app Samsung Freecess immunity during incoming calls.
-   * Must be called at least once (at login / app start).
+   * Gives the app Samsung Freecess immunity during calls.
    */
   async registerPhoneAccount() {
-    if (Platform.OS !== 'android') {
-      return true;
-    }
+    if (Platform.OS !== 'android') return true;
 
     try {
       const result = await ConnectionService.registerPhoneAccount();
@@ -87,13 +86,66 @@ class ConnectionServiceHelper {
   }
 
   /**
+   * [NEW v2.0] Зарегистрировать ИСХОДЯЩИЙ звонок через Android Telecom API.
+   *
+   * Вызывается из HomeScreen.makeCall() ПЕРЕД navigate('Call').
+   *
+   * Цепочка:
+   *   JS placeCall() → ConnectionServiceModule.placeCall()
+   *   → TelecomHelper.placeOutgoingCall()
+   *   → TelecomManager.placeCall()
+   *   → VoIPConnectionService.onCreateOutgoingConnection()
+   *   → VoIPConnection(state=DIALING)
+   *   → Freecess immunity активна
+   *
+   * @param {string} peer - имя пользователя которому звоним
+   * @param {boolean} isVideo - видеозвонок или аудио
+   * @returns {Promise<boolean>} - true если Telecom зарегистрировал успешно
+   */
+  async placeCall(peer, isVideo) {
+    if (Platform.OS !== 'android') {
+      // iOS: звонить напрямую через SocketService (нет Telecom API)
+      return false;
+    }
+
+    try {
+      console.log('[ConnectionService] 📞 placeCall:', peer, 'video:', isVideo);
+      const result = await ConnectionService.placeCall(peer, !!isVideo);
+      console.log('[ConnectionService] ✅ Telecom placeCall registered');
+      return result;
+    } catch (error) {
+      console.error('[ConnectionService] ❌ placeCall error:', error);
+      return false;
+    }
+  }
+
+  /**
+   * [NEW v2.0] Перевести исходящий VoIPConnection в состояние ACTIVE.
+   *
+   * Вызывается из CallScreen когда удалённая сторона ответила
+   * (при получении webrtc_answer и успешном setRemoteDescription).
+   *
+   * @returns {Promise<boolean>}
+   */
+  async setOutgoingCallActive() {
+    if (Platform.OS !== 'android') return true;
+
+    try {
+      const result = await ConnectionService.setOutgoingCallActive();
+      console.log('[ConnectionService] ✅ Outgoing call → ACTIVE');
+      return result;
+    } catch (error) {
+      console.error('[ConnectionService] ❌ setOutgoingCallActive error:', error);
+      return false;
+    }
+  }
+
+  /**
    * End the active Telecom call connection.
-   * Must be called when a call ends to properly release Telecom resources.
+   * Called when a call ends (any side).
    */
   async endTelecomCall() {
-    if (Platform.OS !== 'android') {
-      return true;
-    }
+    if (Platform.OS !== 'android') return true;
 
     try {
       const result = await ConnectionService.endTelecomCall();

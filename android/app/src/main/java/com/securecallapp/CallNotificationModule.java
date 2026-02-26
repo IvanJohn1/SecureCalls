@@ -1,6 +1,5 @@
 package com.securecallapp;
 
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
@@ -14,22 +13,35 @@ import com.facebook.react.bridge.ReactMethod;
 import android.util.Log;
 
 /**
- * CallNotificationModule - Показ уведомлений о звонках через Native API
+ * CallNotificationModule v2.1 FIX
  *
- * ИСПРАВЛЕНИЕ v2.0:
+ * ИСПРАВЛЕНИЕ v2.1:
+ * ─────────────────────────────────────────────────────────────
+ * БАГ: CHANNEL_ID = "incoming_call_channel" — отдельный канал,
+ *      отличный от "incoming_calls_v2", который используется везде.
+ *      Канал "incoming_call_channel" создавался БЕЗ setBypassDnd(true)
+ *      и без правильных AudioAttributes рингтона.
+ *      Результат: при включённом DND (Не беспокоить) звонок, показанный
+ *      через этот модуль (foreground), не давал звук и вибрацию.
+ *
+ * ФИКС: Используем канал "incoming_calls_v2", созданный в
+ *       MyFirebaseMessagingService с правильными настройками.
+ *       Убираем createNotificationChannel() — канал уже существует.
+ *
+ * ИСПРАВЛЕНИЕ v2.0 (сохранено):
  * ─────────────────────────────────────────────────────────────
  * БАГ: intent.putExtra("isVideo", isVideo) клало Boolean в Intent.
- *      MainActivity.handleIntent() читает isVideo через extras.getString("isVideo"),
- *      что возвращает null для Boolean-экстра, а не "true"/"false".
- *      Результат: isVideo всегда == false, все видеозвонки показываются как аудио.
+ *      MainActivity.handleIntent() читает через extras.getString("isVideo") → null.
  *
  * ФИКС: String.valueOf(isVideo) → "true" или "false"
- *       Совместимо с остальным кодом (MyFirebaseMessagingService, VoIPConnectionService).
  * ─────────────────────────────────────────────────────────────
  */
 public class CallNotificationModule extends ReactContextBaseJavaModule {
     private static final String TAG = "CallNotificationModule";
-    private static final String CHANNEL_ID = "incoming_call_channel";
+
+    // FIX v2.1: Используем тот же канал что и MyFirebaseMessagingService.
+    // Канал создан с setBypassDnd(true), ringtone AudioAttributes, IMPORTANCE_HIGH.
+    private static final String CHANNEL_ID = "incoming_calls_v2";
     private static final int NOTIFICATION_ID = 9999;
 
     private final ReactApplicationContext reactContext;
@@ -37,31 +49,13 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
     public CallNotificationModule(ReactApplicationContext reactContext) {
         super(reactContext);
         this.reactContext = reactContext;
-        createNotificationChannel();
+        // Убираем createNotificationChannel() — "incoming_calls_v2" уже создан
+        // в MyFirebaseMessagingService.onCreate() с правильными настройками.
     }
 
     @Override
     public String getName() {
         return "CallNotificationModule";
-    }
-
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID,
-                "Входящие звонки",
-                NotificationManager.IMPORTANCE_HIGH
-            );
-            channel.setDescription("Уведомления о входящих звонках");
-            channel.enableVibration(true);
-            channel.setVibrationPattern(new long[]{0, 300, 200, 300});
-
-            NotificationManager notificationManager =
-                reactContext.getSystemService(NotificationManager.class);
-            notificationManager.createNotificationChannel(channel);
-
-            Log.d(TAG, "✓ Notification channel создан");
-        }
     }
 
     @ReactMethod
@@ -75,10 +69,6 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
 
         try {
             // FIX v2.0: String.valueOf(isVideo) вместо boolean isVideo
-            // MainActivity.handleIntent() читает через extras.getString("isVideo")
-            // Boolean extras.getString() → null → "true".equals(null) → false (НЕВЕРНО)
-            // String.valueOf(true) → "true" → "true".equals("true") → true (ВЕРНО)
-
             Intent intent = new Intent(reactContext, MainActivity.class);
             intent.setAction(Intent.ACTION_MAIN);
             intent.addCategory(Intent.CATEGORY_LAUNCHER);
@@ -87,7 +77,7 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
                           Intent.FLAG_ACTIVITY_SINGLE_TOP);
             intent.putExtra("type", "incoming_call");
             intent.putExtra("from", from);
-            intent.putExtra("isVideo", String.valueOf(isVideo)); // ← ИСПРАВЛЕНО
+            intent.putExtra("isVideo", String.valueOf(isVideo));
             if (callId != null && !callId.isEmpty()) {
                 intent.putExtra("callId", callId);
             }
@@ -105,7 +95,7 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
                                     Intent.FLAG_ACTIVITY_CLEAR_TOP);
             fullScreenIntent.putExtra("type", "incoming_call");
             fullScreenIntent.putExtra("from", from);
-            fullScreenIntent.putExtra("isVideo", String.valueOf(isVideo)); // ← ИСПРАВЛЕНО
+            fullScreenIntent.putExtra("isVideo", String.valueOf(isVideo));
             if (callId != null && !callId.isEmpty()) {
                 fullScreenIntent.putExtra("callId", callId);
             }
@@ -119,7 +109,7 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
 
             NotificationCompat.Builder builder = new NotificationCompat.Builder(
                 reactContext,
-                CHANNEL_ID
+                CHANNEL_ID  // FIX v2.1: "incoming_calls_v2" с DND bypass
             )
                 .setSmallIcon(android.R.drawable.ic_menu_call)
                 .setContentTitle(isVideo ? "📹 Видеозвонок" : "📞 Звонок")
@@ -138,7 +128,7 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
                 (NotificationManager) reactContext.getSystemService(Context.NOTIFICATION_SERVICE);
             notificationManager.notify(NOTIFICATION_ID, builder.build());
 
-            Log.d(TAG, "✓ Notification показан");
+            Log.d(TAG, "✓ Notification показан (channel: " + CHANNEL_ID + ")");
 
         } catch (Exception e) {
             Log.e(TAG, "❌ Ошибка показа notification: " + e.getMessage());

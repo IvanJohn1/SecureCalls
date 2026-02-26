@@ -21,27 +21,21 @@ import java.util.Map;
 
 /**
  * ═══════════════════════════════════════════════════════════
- * MyFirebaseMessagingService v3.0 FIX
+ * MyFirebaseMessagingService v3.1 FIX
  * ═══════════════════════════════════════════════════════════
  *
- * КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ v3.0:
+ * ИСПРАВЛЕНИЕ v3.1:
  *
- * 1. НОВЫЕ CHANNEL ID ("_v2") — принудительное пересоздание каналов.
- *    Android кэширует importance при первом createNotificationChannel().
- *    Если канал был создан ранее с IMPORTANCE_DEFAULT, повторный вызов
- *    с IMPORTANCE_HIGH НЕ изменит importance — система игнорирует апгрейд.
- *    Единственный способ: создать канал с НОВЫМ ID.
+ * БАГ: onNewToken() сохранял FCM токен в SharedPreferences "SecureCallPrefs",
+ *      тогда как BootReceiver читает из NativeStorageModule.PREFS_NAME
+ *      = "SecureCallNativePrefs". После ротации токена (переустановка,
+ *      плановая ротация Firebase) BootReceiver не мог найти токен и не
+ *      запускал ConnectionForegroundService после перезагрузки устройства.
  *
- * 2. Удаление старых каналов — предотвращает "призрачные" уведомления.
+ * ФИКС: onNewToken() теперь пишет в NativeStorageModule.PREFS_NAME
+ *       (то же хранилище, что NativeStorageModule.saveFcmToken() из JS).
  *
- * 3. Обработчик call_cancelled — закрывает incoming call notification
- *    когда звонящий отменяет звонок.
- *
- * 4. FOREGROUND_SERVICE_IMMEDIATE — notification показывается мгновенно.
- *
- * 5. Missed calls канал — IMPORTANCE_HIGH (heads-up) вместо DEFAULT.
- *
- * 6. Messages канал — IMPORTANCE_HIGH для heads-up при закрытом приложении.
+ * Остальные исправления v3.0 без изменений (см. ниже).
  */
 public class MyFirebaseMessagingService extends FirebaseMessagingService {
     private static final String TAG = "FCMService";
@@ -60,7 +54,7 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     public void onCreate() {
         super.onCreate();
         Log.d(TAG, "========================================");
-        Log.d(TAG, "Firebase Messaging Service v3.0 CREATED");
+        Log.d(TAG, "Firebase Messaging Service v3.1 CREATED");
         Log.d(TAG, "========================================");
         deleteOldNotificationChannels();
         createNotificationChannels();
@@ -69,8 +63,17 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     @Override
     public void onNewToken(String token) {
         Log.d(TAG, "NEW FCM TOKEN: " + token);
-        SharedPreferences prefs = getSharedPreferences("SecureCallPrefs", MODE_PRIVATE);
-        prefs.edit().putString("fcm_token", token).apply();
+
+        // FIX v3.1: Используем NativeStorageModule.PREFS_NAME ("SecureCallNativePrefs")
+        // вместо "SecureCallPrefs". BootReceiver читает именно из SecureCallNativePrefs.
+        // Несовпадение хранилища приводило к тому, что после ротации токена
+        // BootReceiver не мог запустить сервис после перезагрузки.
+        getSharedPreferences(NativeStorageModule.PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putString("fcm_token", token)
+                .apply();
+
+        Log.d(TAG, "FCM token saved to " + NativeStorageModule.PREFS_NAME);
     }
 
     @Override
@@ -181,9 +184,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
     /**
      * Show the incoming call notification with full-screen intent.
-     *
-     * Uses CHANNEL_ID_CALLS (IMPORTANCE_HIGH) + CATEGORY_CALL + FullScreenIntent.
-     * FullScreenIntent bypasses Samsung Edge Lighting and shows over lock screen.
      */
     private void showIncomingCallNotification(String from, String callId, boolean isVideo) {
         Intent intent = new Intent(this, MainActivity.class);
@@ -206,7 +206,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
-        // Full-screen Intent — wakes lock screen, bypasses Edge Lighting
         Intent fullScreenIntent = new Intent(this, MainActivity.class);
         fullScreenIntent.setAction(Intent.ACTION_MAIN);
         fullScreenIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
@@ -318,7 +317,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             return;
         }
 
-        // Dismiss any lingering incoming call notification
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (nm != null) {
             nm.cancel(INCOMING_CALL_NOTIFICATION_ID);
@@ -355,20 +353,18 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
     }
 
     /**
-     * Обработка отмены звонка — убрать incoming call notification
+     * Обработка отмены звонка
      */
     private void handleCallCancelled(Map<String, String> data) {
         String from = data.get("from");
         Log.d(TAG, "CALL CANCELLED by: " + from);
 
-        // Dismiss the incoming call notification
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (nm != null) {
             nm.cancel(INCOMING_CALL_NOTIFICATION_ID);
             Log.d(TAG, "Incoming call notification dismissed");
         }
 
-        // End the Telecom connection if active
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             TelecomHelper.endActiveCall();
         }
@@ -376,7 +372,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
     /**
      * Разбудить CPU при входящем звонке.
-     * PARTIAL_WAKE_LOCK удерживает CPU — достаточно для обработки push.
      */
     private void wakeScreen() {
         try {
@@ -424,11 +419,6 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
 
     /**
      * Create notification channels with correct importance.
-     *
-     * IMPORTANCE_HIGH is required for:
-     * - Heads-up display (bypasses Samsung Edge Lighting)
-     * - FullScreenIntent to work on lock screen
-     * - Sound and vibration
      */
     private void createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
