@@ -1,17 +1,28 @@
-// services/firebase.js - ИСПРАВЛЕННАЯ ВЕРСИЯ v7.2.1
+// services/firebase.js - v8.0 DATA-ONLY FIX
 const admin = require('firebase-admin');
 const path = require('path');
 
 /**
  * ═══════════════════════════════════════════════════════════
- * FirebaseService v7.2.1 - КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ
+ * FirebaseService v8.0 - DATA-ONLY FCM messages
  * ═══════════════════════════════════════════════════════════
- * 
- * КЛЮЧЕВЫЕ ИЗМЕНЕНИЯ v7.2.1:
- * - ✅ Добавлен android.notification для full-screen звонков
- * - ✅ Правильные приоритеты для Android/iOS
- * - ✅ Расширенное логирование для отладки
- * - ✅ Обработка всех типов ошибок
+ *
+ * CRITICAL FIX v8.0:
+ * All Android FCM messages are now DATA-ONLY (no android.notification block).
+ *
+ * WHY: With combined payload (data + notification), when the app is killed
+ * or in background, Android automatically shows a basic system notification
+ * from the notification block and onMessageReceived() is NOT called.
+ * This means MyFirebaseMessagingService never fires, so:
+ *   - No full-screen intent for calls
+ *   - No action buttons (answer/reject)
+ *   - No IncomingCallTaskService for socket pre-connect
+ *   - No proper notification for messages in status bar
+ *
+ * With DATA-ONLY: onMessageReceived() fires in ALL states (foreground,
+ * background, killed). The native Java service creates proper notifications.
+ *
+ * Логирование, обработка ошибок и multicast — сохранены из v7.2.1.
  */
 
 class FirebaseService {
@@ -80,116 +91,96 @@ class FirebaseService {
    * ═══════════════════════════════════════════════════════════
    * ВХОДЯЩИЙ ЗВОНОК - КРИТИЧНО ВАЖНАЯ ФУНКЦИЯ
    * ═══════════════════════════════════════════════════════════
-   * 
-   * МАКСИМАЛЬНЫЙ ПРИОРИТЕТ:
-   * - Android: priority: high, notification для full-screen
-   * - iOS: apns-priority: 10, interruption-level: time-sensitive
-   * - DATA MESSAGE + NOTIFICATION для работы в фоне
-   * 
-   * ⚠️ КРИТИЧНО: android.notification ОБЯЗАТЕЛЕН для full-screen!
+  *
+   * FIX v8.0: DATA-ONLY message (без android.notification!)
+   *
+   * ПОЧЕМУ DATA-ONLY:
+   * С combined payload (data + notification) при закрытом приложении
+   * Android АВТОМАТИЧЕСКИ показывает простой notification из notification
+   * блока, а onMessageReceived() в MyFirebaseMessagingService НЕ вызывается.
+   * Это значит: нет full-screen intent, нет кнопок ответа/отклонения,
+   * нет IncomingCallTaskService для pre-connect сокета.
+   *
+   * С DATA-ONLY: onMessageReceived() вызывается ВСЕГДА (foreground,
+   * background, killed). MyFirebaseMessagingService создаёт правильный
+   * notification с full-screen intent и action buttons.
    */
   async sendIncomingCallPush(fcmToken, fromUsername, isVideo, callId) {
     if (!this.isReady()) {
-      console.warn('[Firebase] ⚠️ Сервис не готов, push не отправлен');
+      console.warn('[Firebase] Сервис не готов, push не отправлен');
       return null;
     }
-
+ 
     if (!fcmToken) {
-      console.warn('[Firebase] ⚠️ FCM токен отсутствует');
+      console.warn('[Firebase] FCM токен отсутствует');
       return null;
     }
-
+ 
     if (!fromUsername) {
-      console.warn('[Firebase] ⚠️ Отсутствует имя отправителя');
+      console.warn('[Firebase] Отсутствует имя отправителя');
       return null;
     }
-
+ 
     try {
       console.log('═══════════════════════════════════════');
-      console.log('[Firebase] ОТПРАВКА PUSH О ЗВОНКЕ');
+      console.log('[Firebase] ОТПРАВКА PUSH О ЗВОНКЕ (DATA-ONLY)');
       console.log('Кому:', fcmToken.substring(0, 20) + '...');
       console.log('От:', fromUsername);
       console.log('Видео:', isVideo);
       console.log('Время:', new Date().toISOString());
       console.log('═══════════════════════════════════════');
-
-      // ═══════════════════════════════════════════════════════════
-      // ИСПРАВЛЕНИЕ v7.2.1: Добавлен android.notification блок
-      // Согласно SERVER_SETUP.md - это КРИТИЧНО для full-screen!
-      // ═══════════════════════════════════════════════════════════
+ 
       const message = {
         token: fcmToken,
-        
-        // DATA PAYLOAD - обрабатывается в фоне
+ 
+        // DATA-ONLY payload — onMessageReceived() fires in ALL app states
         data: {
           type: 'incoming_call',
           from: fromUsername,
           isVideo: isVideo.toString(),
           callId: callId || '',
           timestamp: Date.now().toString(),
-          priority: 'high',
-          sound: 'default',
         },
-        
+ 
         android: {
-          // МАКСИМАЛЬНЫЙ приоритет для Android
+          // HIGH priority wakes the device and triggers onMessageReceived()
           priority: 'high',
-          // TTL = 30 секунд для немедленной доставки или отмены
+          // TTL = 30 seconds
           ttl: 30000,
-          
-          // ⚠️ КРИТИЧНО: Notification блок для full-screen!
-          notification: {
-            channelId: 'incoming_calls',
-            priority: 'max',
-            defaultSound: true,
-            defaultVibrateTimings: true,
-            visibility: 'public',
-            
-            // Эти поля помогают с отображением
-            title: isVideo ? '📹 Видеозвонок' : '📞 Звонок',
-            body: `${fromUsername} звонит вам`,
-          },
+          // NO notification block — this makes it DATA-ONLY on Android
         },
-        
+ 
         apns: {
           headers: {
-            // Максимальный приоритет для iOS
             'apns-priority': '10',
-            // Немедленная доставка
             'apns-push-type': 'alert',
           },
           payload: {
             aps: {
-              // Разбудить приложение
               'content-available': 1,
-              // Time-sensitive для iOS 15+
               'interruption-level': 'time-sensitive',
-              // Звук
               sound: 'default',
-              // Категория для actions
               category: 'CALL',
-              // Badge
               badge: 1,
-              // Alert
               alert: {
-                title: isVideo ? '📹 Видеозвонок' : '📞 Звонок',
+                title: isVideo ? 'Видеозвонок' : 'Входящий звонок',
                 body: `${fromUsername} звонит вам`,
               },
             },
           },
         },
       };
-
+ 
       const response = await admin.messaging().send(message);
-      
-      console.log('[Firebase] ✅ Push о звонке отправлен УСПЕШНО');
+ 
+      console.log('[Firebase] Push о звонке отправлен УСПЕШНО');
       console.log('[Firebase] Response ID:', response);
       console.log('═══════════════════════════════════════');
-      
+ 
       return response;
     } catch (error) {
       console.error('═══════════════════════════════════════');
-      console.error('[Firebase] ❌ ОШИБКА отправки push о звонке');
+      console.error('[Firebase] ОШИБКА отправки push о звонке');
       console.error('[Firebase] Error:', error.message);
       console.error('[Firebase] Error code:', error.code);
       console.error('[Firebase] Token:', fcmToken.substring(0, 20) + '...');
@@ -239,12 +230,7 @@ class FirebaseService {
         android: {
           priority: 'high',
           ttl: 86400000, // 24 часа
-          notification: {
-            channelId: 'messages',
-            title: '💬 Новое сообщение',
-            body: `${fromUsername}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`,
-            defaultSound: true,
-          },
+          // NO notification block — DATA-ONLY, onMessageReceived() fires in ALL app states
         },
         apns: {
           headers: {
@@ -254,7 +240,7 @@ class FirebaseService {
             aps: {
               'content-available': 1,
               alert: {
-                title: '💬 Новое сообщение',
+                title: 'Новое сообщение',
                 body: `${fromUsername}: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`,
               },
               sound: 'default',
@@ -279,10 +265,11 @@ class FirebaseService {
 
   /**
    * ═══════════════════════════════════════════════════════════
-   * ПРОПУЩЕННЫЙ ЗВОНОК - КРИТИЧНО ВАЖНАЯ ФУНКЦИЯ
+   * ПРОПУЩЕННЫЙ ЗВОНОК - DATA-ONLY
    * ═══════════════════════════════════════════════════════════
-   * 
-   * ВАЖНО: Это уведомление ДОЛЖНО дойти даже если приложение закрыто
+   *
+   * DATA-ONLY: onMessageReceived() вызывается во всех состояниях,
+   * нативный сервис создаёт правильное уведомление.
    */
   async sendMissedCallNotification(fcmToken, fromUsername, isVideo) {
     if (!this.isReady()) {
@@ -303,16 +290,12 @@ class FirebaseService {
       console.log('Видео:', isVideo);
       console.log('═══════════════════════════════════════');
 
-      const title = isVideo ? '📵 Пропущенный видеозвонок' : '📵 Пропущенный звонок';
+      const title = isVideo ? 'Пропущенный видеозвонок' : 'Пропущенный звонок';
       const body = `От: ${fromUsername}`;
 
-      // Комбинируем notification + data для максимальной доставляемости
+      // DATA-ONLY — onMessageReceived() fires in ALL app states
       const message = {
         token: fcmToken,
-        notification: {
-          title: title,
-          body: body,
-        },
         data: {
           type: 'missed_call',
           from: fromUsername,
@@ -321,15 +304,7 @@ class FirebaseService {
         },
         android: {
           priority: 'high',
-          notification: {
-            sound: 'default',
-            channelId: 'missed_calls',
-            priority: 'high',
-            // Уведомление не исчезнет само
-            sticky: true,
-            // Показать даже в DND режиме
-            visibility: 'public',
-          },
+          // NO notification block — DATA-ONLY
         },
         apns: {
           headers: {
@@ -343,7 +318,6 @@ class FirebaseService {
               },
               sound: 'default',
               badge: 1,
-              // Прерывающее уведомление
               'interruption-level': 'time-sensitive',
             },
           },

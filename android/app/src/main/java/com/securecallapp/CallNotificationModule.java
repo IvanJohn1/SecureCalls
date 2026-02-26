@@ -23,7 +23,8 @@ import android.util.Log;
  */
 public class CallNotificationModule extends ReactContextBaseJavaModule {
     private static final String TAG = "CallNotificationModule";
-    private static final String CHANNEL_ID = "incoming_call_channel";
+    // UNIFIED with MyFirebaseMessagingService.CHANNEL_ID_CALLS and AndroidManifest default channel
+    private static final String CHANNEL_ID = "incoming_calls";
     private static final int NOTIFICATION_ID = 9999;
 
     private final ReactApplicationContext reactContext;
@@ -83,7 +84,10 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
                           Intent.FLAG_ACTIVITY_SINGLE_TOP);
             intent.putExtra("type", "incoming_call");
             intent.putExtra("from", from);
-            intent.putExtra("isVideo", isVideo);
+            // FIX: MainActivity.handleIntent() reads isVideo via extras.getString("isVideo").
+            // Storing as boolean would return null from getString() → isVideo always false.
+            // Store as String to match MyFirebaseMessagingService behaviour.
+            intent.putExtra("isVideo", String.valueOf(isVideo));
             if (callId != null && !callId.isEmpty()) {
                 intent.putExtra("callId", callId);
             }
@@ -102,7 +106,8 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
                                     Intent.FLAG_ACTIVITY_CLEAR_TOP);
             fullScreenIntent.putExtra("type", "incoming_call");
             fullScreenIntent.putExtra("from", from);
-            fullScreenIntent.putExtra("isVideo", isVideo);
+            // FIX: same as above — store as String
+            fullScreenIntent.putExtra("isVideo", String.valueOf(isVideo));
             if (callId != null && !callId.isEmpty()) {
                 fullScreenIntent.putExtra("callId", callId);
             }

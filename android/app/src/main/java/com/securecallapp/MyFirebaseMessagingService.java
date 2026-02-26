@@ -356,62 +356,84 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         }
     }
 
-    /**
-     * Создание notification channels (Android 8.0+)
-     * FIX: Правильные AudioAttributes для Android 15
-     */
+    // /**
+    //  * Создание notification channels (Android 8.0+)
+    // *
+    //  * IMPORTANT: Android does not allow upgrading channel importance after creation.
+    //  * To ensure channels have the correct importance (HIGH for messages), we delete
+    //  * and recreate them. This is safe — user-modified settings will be reset, but
+    //  * correct importance is more important than preserving old settings.
+    //  */
     private void createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationManager notificationManager = getSystemService(NotificationManager.class);
+            NotificationManager nm = getSystemService(NotificationManager.class);
 
-            if (notificationManager == null) {
-                Log.e(TAG, "❌ NotificationManager null");
+            if (nm == null) {
+                Log.e(TAG, "NotificationManager null");
                 return;
             }
+
+            // FIX v3.0: Do NOT delete channels before creating.
+            // Deleting an active channel instantly removes all its visible notifications
+            // (e.g., the incoming-call notification disappears while it's ringing).
+            // Also causes a race condition with App.js which creates the same channels.
+            // Correct approach: create only if the channel does not exist yet.
+            // If channel importance must change in a future version, use a NEW channel ID.
 
             Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
             Uri notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
 
-            AudioAttributes audioAttributes = new AudioAttributes.Builder()
+            AudioAttributes ringtoneAttrs = new AudioAttributes.Builder()
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                     .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                     .build();
 
             // Канал для входящих звонков — IMPORTANCE_HIGH
-            NotificationChannel callsChannel = new NotificationChannel(
-                    CHANNEL_ID_CALLS,
-                    "Входящие звонки",
-                    NotificationManager.IMPORTANCE_HIGH
-            );
-            callsChannel.setDescription("Уведомления о входящих звонках");
-            callsChannel.enableVibration(true);
-            callsChannel.setVibrationPattern(new long[]{0, 500, 300, 500, 300, 500});
-            callsChannel.setSound(ringtoneUri, audioAttributes);
-            callsChannel.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
-            callsChannel.setBypassDnd(true);
-            notificationManager.createNotificationChannel(callsChannel);
+            if (nm.getNotificationChannel(CHANNEL_ID_CALLS) == null) {
+                NotificationChannel callsChannel = new NotificationChannel(
+                        CHANNEL_ID_CALLS,
+                        "Входящие звонки",
+                        NotificationManager.IMPORTANCE_HIGH
+                );
+                callsChannel.setDescription("Уведомления о входящих звонках");
+                callsChannel.enableVibration(true);
+                callsChannel.setVibrationPattern(new long[]{0, 500, 300, 500, 300, 500});
+                callsChannel.setSound(ringtoneUri, ringtoneAttrs);
+                callsChannel.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
+                callsChannel.setBypassDnd(true);
+                nm.createNotificationChannel(callsChannel);
+                Log.d(TAG, "Channel created: " + CHANNEL_ID_CALLS);
+            }
 
-            // Канал для сообщений — IMPORTANCE_HIGH для показа в status bar
-            NotificationChannel messagesChannel = new NotificationChannel(
-                    CHANNEL_ID_MESSAGES,
-                    "Сообщения",
-                    NotificationManager.IMPORTANCE_HIGH
-            );
-            messagesChannel.setDescription("Уведомления о новых сообщениях");
-            messagesChannel.setSound(notificationUri, null);
-            notificationManager.createNotificationChannel(messagesChannel);
+            // Канал для сообщений — IMPORTANCE_HIGH
+            if (nm.getNotificationChannel(CHANNEL_ID_MESSAGES) == null) {
+                NotificationChannel messagesChannel = new NotificationChannel(
+                        CHANNEL_ID_MESSAGES,
+                        "Сообщения",
+                        NotificationManager.IMPORTANCE_HIGH
+                );
+                messagesChannel.setDescription("Уведомления о новых сообщениях");
+                messagesChannel.enableVibration(true);
+                messagesChannel.setSound(notificationUri, null);
+                messagesChannel.setLockscreenVisibility(NotificationCompat.VISIBILITY_PUBLIC);
+                nm.createNotificationChannel(messagesChannel);
+                Log.d(TAG, "Channel created: " + CHANNEL_ID_MESSAGES);
+            }
 
-            // Канал для пропущенных звонков
-            NotificationChannel missedCallsChannel = new NotificationChannel(
-                    CHANNEL_ID_MISSED,
-                    "Пропущенные звонки",
-                    NotificationManager.IMPORTANCE_DEFAULT
-            );
-            missedCallsChannel.setDescription("Уведомления о пропущенных звонках");
-            missedCallsChannel.setSound(notificationUri, null);
-            notificationManager.createNotificationChannel(missedCallsChannel);
+            // Канал для пропущенных звонков — IMPORTANCE_HIGH
+            if (nm.getNotificationChannel(CHANNEL_ID_MISSED) == null) {
+                NotificationChannel missedCallsChannel = new NotificationChannel(
+                        CHANNEL_ID_MISSED,
+                        "Пропущенные звонки",
+                        NotificationManager.IMPORTANCE_HIGH
+                );
+                missedCallsChannel.setDescription("Уведомления о пропущенных звонках");
+                missedCallsChannel.setSound(notificationUri, null);
+                nm.createNotificationChannel(missedCallsChannel);
+                Log.d(TAG, "Channel created: " + CHANNEL_ID_MISSED);
+            }
 
-            Log.d(TAG, "✅ Notification channels созданы");
+            Log.d(TAG, "Notification channels initialized");
         }
     }
 

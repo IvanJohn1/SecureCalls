@@ -85,8 +85,10 @@ export default function App() {
 
     try {
       // Канал для входящих звонков
+      // ID must match: MyFirebaseMessagingService.CHANNEL_ID_CALLS = "incoming_calls"
+      // and AndroidManifest default_notification_channel_id = "incoming_calls"
       await notifee.createChannel({
-        id: 'incoming-calls',
+        id: 'incoming_calls',
         name: 'Входящие звонки',
         importance: AndroidImportance.HIGH,
         sound: 'default',
@@ -103,10 +105,11 @@ export default function App() {
       });
 
       // Канал для пропущенных звонков
+      // ID must match: MyFirebaseMessagingService.CHANNEL_ID_MISSED = "missed_calls"
       await notifee.createChannel({
-        id: 'missed-calls',
+        id: 'missed_calls',
         name: 'Пропущенные звонки',
-        importance: AndroidImportance.DEFAULT,
+        importance: AndroidImportance.HIGH,
         sound: 'default',
       });
 
@@ -174,7 +177,7 @@ export default function App() {
               : 'Входящий звонок',
             body: `${data.from} звонит вам`,
             android: {
-              channelId: 'incoming-calls',
+              channelId: 'incoming_calls',
               importance: AndroidImportance.HIGH,
               smallIcon: 'ic_launcher',
               fullScreenAction: {

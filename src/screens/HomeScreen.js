@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   AppState,
   DeviceEventEmitter,
+  NativeModules,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import messaging from '@react-native-firebase/messaging';
@@ -94,15 +95,28 @@ export default function HomeScreen({route, navigation}) {
   };
 
   const handleIncomingCallFromIntent = (data) => {
-    console.log('[HomeScreen] 📞 Входящий звонок от Intent:', data);
+    console.log('╔══════════════════════════════════════════════╗');
+    console.log('║  [HomeScreen] INCOMING CALL FROM INTENT      ║');
+    console.log('╚══════════════════════════════════════════════╝');
+    console.log('[HomeScreen] Intent data:', JSON.stringify(data));
 
     if (data && data.from) {
+      // Отменяем уведомление — пользователь уже тапнул на него
+      const {CallNotificationModule} = NativeModules;
+      if (CallNotificationModule) {
+        CallNotificationModule.cancelIncomingCallNotification();
+        console.log('[HomeScreen] ✅ Нативное уведомление отменено (intent)');
+      }
+
       navigation.navigate('IncomingCall', {
         from: data.from,
         isVideo: data.isVideo || false,
         username: username,
         callId: data.callId || null,
       });
+      console.log('[HomeScreen] ✅ Навигация на IncomingCall (intent) выполнена');
+    } else {
+      console.warn('[HomeScreen] ⚠️ handleIncomingCallFromIntent: нет data.from', data);
     }
   };
 
@@ -146,6 +160,7 @@ export default function HomeScreen({route, navigation}) {
   };
 
   const setupSocketListeners = () => {
+    console.log('[HomeScreen] ✅ setupSocketListeners — подписка на incoming_call');
     SocketService.on('users_list', handleUsersList);
     SocketService.on('user_online', handleUserOnline);
     SocketService.on('user_offline', handleUserOffline);
@@ -157,6 +172,7 @@ export default function HomeScreen({route, navigation}) {
   };
 
   const cleanupSocketListeners = () => {
+    console.log('[HomeScreen] ⚠️ cleanupSocketListeners — ОТПИСКА от incoming_call (компонент размонтируется)');
     SocketService.off('users_list', handleUsersList);
     SocketService.off('user_online', handleUserOnline);
     SocketService.off('user_offline', handleUserOffline);
@@ -195,15 +211,30 @@ export default function HomeScreen({route, navigation}) {
   };
 
   const handleIncomingCall = data => {
-    console.log('[HomeScreen] 📞 Входящий звонок от:', data.from, 'callId:', data.callId);
+    console.log('╔══════════════════════════════════════════════╗');
+    console.log('║  [HomeScreen] handleIncomingCall ВЫЗВАН      ║');
+    console.log('╚══════════════════════════════════════════════╝');
+    console.log('[HomeScreen] От:', data.from);
+    console.log('[HomeScreen] callId:', data.callId);
+    console.log('[HomeScreen] isVideo:', data.isVideo);
+    console.log('[HomeScreen] AppState:', AppState.currentState);
+    console.log('[HomeScreen] isMounted:', isMountedRef.current);
 
-    // [FIX v11.0] Передаём callId чтобы IncomingCallScreen мог его использовать в accept_call
+    // Отменяем нативное уведомление — оно могло быть показано SocketService
+    // пока приложение было в фоне, теперь JS его обработает сам
+    const {CallNotificationModule} = NativeModules;
+    if (CallNotificationModule) {
+      CallNotificationModule.cancelIncomingCallNotification();
+      console.log('[HomeScreen] ✅ Нативное уведомление отменено');
+    }
+
     navigation.navigate('IncomingCall', {
       from: data.from,
       isVideo: data.isVideo,
       username: username,
       callId: data.callId,
     });
+    console.log('[HomeScreen] ✅ Навигация на IncomingCall выполнена');
   };
 
   const handleForceDisconnect = data => {

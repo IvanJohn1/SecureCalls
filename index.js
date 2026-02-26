@@ -43,7 +43,17 @@ notifee.onBackgroundEvent(async ({type, detail}) => {
 
 /**
  * 2. FCM BACKGROUND MESSAGE HANDLER
- * 
+ *
+ * ⚠️  АРХИТЕКТУРНОЕ ПРИМЕЧАНИЕ:
+ * MyFirebaseMessagingService объявлен в AndroidManifest.xml с intent-filter
+ * com.google.firebase.MESSAGING_EVENT и перехватывает ВСЕ FCM-сообщения раньше
+ * чем RN Firebase может передать их в JS. Поэтому этот handler в норме
+ * НЕ вызывается — MyFirebaseMessagingService обрабатывает всё нативно.
+ *
+ * Handler оставлен как резервный на случай, если нативный сервис будет удалён
+ * или изменена архитектура. Если он вдруг начнёт срабатывать одновременно
+ * с нативным сервисом — возникнут дублирующиеся уведомления.
+ *
  * КРИТИЧНО: Этот handler ОБЯЗАТЕЛЬНО должен вернуть Promise
  */
 messaging().setBackgroundMessageHandler(async remoteMessage => {
@@ -67,8 +77,9 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
       console.log('[FCM BG] 📞 ВХОДЯЩИЙ ЗВОНОК от:', data.from);
 
       // 1. Создать канал
+      // Channel ID MUST match MyFirebaseMessagingService.CHANNEL_ID_CALLS = "incoming_calls"
       const channelId = await notifee.createChannel({
-        id: 'incoming-calls',
+        id: 'incoming_calls',
         name: 'Входящие звонки',
         importance: AndroidImportance.HIGH,
         sound: 'default',
@@ -86,7 +97,7 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
           : 'Входящий звонок',
         body: `${data.from} звонит вам`,
         android: {
-          channelId: 'incoming-calls',
+          channelId: 'incoming_calls',
           importance: AndroidImportance.HIGH,
           smallIcon: 'ic_launcher',
 
@@ -178,10 +189,11 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
     else if (data.type === 'missed_call') {
       console.log('[FCM BG] 📞 ПРОПУЩЕННЫЙ ЗВОНОК от:', data.from);
 
+      // Channel ID MUST match MyFirebaseMessagingService.CHANNEL_ID_MISSED = "missed_calls"
       const channelId = await notifee.createChannel({
-        id: 'missed-calls',
+        id: 'missed_calls',
         name: 'Пропущенные звонки',
-        importance: AndroidImportance.DEFAULT,
+        importance: AndroidImportance.HIGH,
       });
 
       await notifee.displayNotification({
@@ -191,7 +203,7 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
           : 'Пропущенный звонок',
         body: `От: ${data.from}`,
         android: {
-          channelId: 'missed-calls',
+          channelId: 'missed_calls',
           actions: [
             {
               title: '📞 Перезвонить',

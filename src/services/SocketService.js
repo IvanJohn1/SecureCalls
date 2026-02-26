@@ -165,7 +165,12 @@ class SocketService {
   setupSocketListeners() {
     // Connected
     this.socket.on('connect', async () => {
-      console.log('[SocketService] Connected');
+      console.log('╔══════════════════════════════════════════════╗');
+      console.log('║  [SocketService] CONNECTED                   ║');
+      console.log('╚══════════════════════════════════════════════╝');
+      console.log('[SocketService] socket.id:', this.socket?.id);
+      console.log('[SocketService] shouldAutoReconnect:', this.shouldAutoReconnect);
+      console.log('[SocketService] savedUsername:', this.savedUsername || 'НЕТ');
       this._setState(STATE.CONNECTED);
       this.reconnectBackoff = 1000; // Reset backoff
       this.notifyListeners('connect');
@@ -190,7 +195,13 @@ class SocketService {
 
     // Disconnected
     this.socket.on('disconnect', (reason) => {
-      console.log('[SocketService] Disconnected:', reason);
+      console.log('╔══════════════════════════════════════════════╗');
+      console.log('║  [SocketService] DISCONNECT                  ║');
+      console.log('╚══════════════════════════════════════════════╝');
+      console.log('[SocketService] Причина:', reason);
+      console.log('[SocketService] shouldAutoReconnect:', this.shouldAutoReconnect);
+      console.log('[SocketService] isManualDisconnect:', this.isManualDisconnect);
+      console.log('[SocketService] savedUsername:', this.savedUsername ? 'ЕСТЬ' : 'НЕТ');
       this.isAuthenticating = false;
       this._setState(STATE.DISCONNECTED);
       this.notifyListeners('disconnect', reason);
@@ -231,8 +242,59 @@ class SocketService {
 
     // Incoming call
     this.socket.on('incoming_call', data => {
-      console.log('[SocketService] INCOMING_CALL from:', data.from);
+      // ═══════════════════════════════════════════════════════
+      // ДИАГНОСТИКА: логируем всё что нужно для отладки
+      // ═══════════════════════════════════════════════════════
+      const appCurrentState = AppState.currentState;
+      const listenerCount = this.listeners.get('incoming_call')?.length || 0;
+
+      console.log('╔══════════════════════════════════════════════╗');
+      console.log('║  [SocketService] INCOMING_CALL ПОЛУЧЕН       ║');
+      console.log('╚══════════════════════════════════════════════╝');
+      console.log('[SocketService] От:', data.from);
+      console.log('[SocketService] callId:', data.callId);
+      console.log('[SocketService] isVideo:', data.isVideo);
+      console.log('[SocketService] AppState.currentState:', appCurrentState);
+      console.log('[SocketService] JS-слушателей incoming_call:', listenerCount);
+      console.log('[SocketService] CallNotificationModule:', NativeModules.CallNotificationModule ? 'ЕСТЬ' : 'NULL ❌');
+
+      // ═══════════════════════════════════════════════════════
+      // ГЛАВНЫЙ ФИС: показываем нативное уведомление если:
+      //   - приложение не активно (background/killed)
+      //   - ИЛИ HomeScreen размонтирован (нет JS-слушателей)
+      //
+      // Это решает сценарий: пользователь смахнул приложение из
+      // Recent Apps → HomeScreen размонтировался → слушатель удалён
+      // → хотя JS-поток ещё жив, некому вызвать showIncomingCallNotification
+      // ═══════════════════════════════════════════════════════
+      const needsNativeNotification = appCurrentState !== 'active' || listenerCount === 0;
+
+      console.log('[SocketService] Нужно нативное уведомление:', needsNativeNotification,
+        `(appState=${appCurrentState}, listeners=${listenerCount})`);
+
+      if (needsNativeNotification) {
+        const CallNotificationModule = NativeModules.CallNotificationModule;
+        if (CallNotificationModule) {
+          try {
+            CallNotificationModule.showIncomingCallNotification(
+              data.from,
+              data.isVideo || false,
+              data.callId || '',
+            );
+            console.log('[SocketService] ✅ showIncomingCallNotification вызван');
+          } catch (e) {
+            console.error('[SocketService] ❌ Ошибка showIncomingCallNotification:', e.message);
+          }
+        } else {
+          console.error('[SocketService] ❌ CallNotificationModule = NULL — уведомление НЕ показано!');
+          console.error('[SocketService] Убедись что CallNotificationPackage зарегистрирован в MainApplication.java');
+        }
+      } else {
+        console.log('[SocketService] App активен и есть слушатели → нативное уведомление пропускаем');
+      }
+
       this.notifyListeners('incoming_call', data);
+      console.log('[SocketService] notifyListeners вызван для', listenerCount, 'слушателей');
     });
 
     // All other events

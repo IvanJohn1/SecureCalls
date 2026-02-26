@@ -75,7 +75,8 @@ export default function IncomingCallScreen({route, navigation}) {
     // КРИТИЧНО: Слушать offer ДО принятия звонка
     SocketService.on('webrtc_offer', handleOffer);
     SocketService.on('call_cancelled', handleCallCancelled);
-
+    SocketService.on('call_timeout', handleCallTimeout);
+ 
     // Back button
     const backHandler = BackHandler.addEventListener(
       'hardwareBackPress',
@@ -84,13 +85,12 @@ export default function IncomingCallScreen({route, navigation}) {
         return true;
       },
     );
-
+ 
     return () => {
       isMountedRef.current = false;
       SocketService.off('webrtc_offer', handleOffer);
       SocketService.off('call_cancelled', handleCallCancelled);
-      backHandler.remove();
-      pulseLoop.stop();
+      SocketService.off('call_timeout', handleCallTimeout);
       scaleAnim.stopAnimation();
       pulseAnim.stopAnimation();
     };
@@ -115,7 +115,16 @@ export default function IncomingCallScreen({route, navigation}) {
       navigation.goBack();
     }
   };
-
+ 
+  const handleCallTimeout = data => {
+    if (!isMountedRef.current) return;
+    // Server sends call_timeout to recipient with {from: callerName}
+    if (data.from === from) {
+      console.log('Call timed out from server');
+      NotificationService.cancelAllNotifications();
+      navigation.goBack();
+    }
+  };
   /**
    * Принять звонок — with socket readiness check
    */
