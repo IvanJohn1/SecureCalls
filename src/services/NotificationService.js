@@ -53,7 +53,7 @@ class NotificationService {
     await notifee.createChannel({
       id: 'messages',
       name: 'Сообщения',
-      importance: AndroidImportance.DEFAULT,
+      importance: AndroidImportance.HIGH,
       sound: 'default',
     });
 

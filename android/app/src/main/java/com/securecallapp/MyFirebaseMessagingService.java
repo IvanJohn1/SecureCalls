@@ -237,23 +237,25 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
         intent.putExtra("type", "message");
         intent.putExtra("from", from);
 
+        // Unique requestCode per sender so notifications don't override each other
+        int requestCode = ("msg_" + from).hashCode();
         PendingIntent pendingIntent = PendingIntent.getActivity(
                 this,
-                0,
+                requestCode,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID_MESSAGES)
                 .setSmallIcon(android.R.drawable.ic_dialog_email)
-                .setContentTitle("💬 " + from)
+                .setContentTitle(from)
                 .setContentText(message)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(message))
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .setContentIntent(pendingIntent)
                 .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
-                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE);
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC);
 
         NotificationManager notificationManager =
                 (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
@@ -389,11 +391,11 @@ public class MyFirebaseMessagingService extends FirebaseMessagingService {
             callsChannel.setBypassDnd(true);
             notificationManager.createNotificationChannel(callsChannel);
 
-            // Канал для сообщений
+            // Канал для сообщений — IMPORTANCE_HIGH для показа в status bar
             NotificationChannel messagesChannel = new NotificationChannel(
                     CHANNEL_ID_MESSAGES,
                     "Сообщения",
-                    NotificationManager.IMPORTANCE_DEFAULT
+                    NotificationManager.IMPORTANCE_HIGH
             );
             messagesChannel.setDescription("Уведомления о новых сообщениях");
             messagesChannel.setSound(notificationUri, null);

@@ -1,20 +1,22 @@
 /**
  * ═══════════════════════════════════════════════════════════
- * App.js - ФИНАЛЬНАЯ ВЕРСИЯ v7.0
+ * App.js - ФИНАЛЬНАЯ ВЕРСИЯ v8.0 FIX
  * ═══════════════════════════════════════════════════════════
- * 
- * НОВОЕ:
- * - Добавлены SettingsScreen и AdminPanelScreen
- * - Улучшена навигация
- * - Все исправления применены
+ *
+ * v8.0 FIX:
+ * - Removed premature ensureServiceRunning() from init
+ * - Added navigationRef for proper incoming call navigation
+ * - Fixed notification action handlers to navigate correctly
+ * - Fixed message notification display in status bar
  */
 
-import React, {useEffect} from 'react';
+import React, {useEffect, useRef} from 'react';
 import {NavigationContainer} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
+import {createNavigationContainerRef} from '@react-navigation/native';
 import notifee, {EventType, AndroidImportance} from '@notifee/react-native';
 import messaging from '@react-native-firebase/messaging';
-import {Platform, Alert} from 'react-native';
+import {Platform} from 'react-native';
 
 // Screens
 import LoginScreen from './src/screens/LoginScreen';
@@ -27,15 +29,17 @@ import AdminPanelScreen from './src/screens/AdminPanelScreen';
 
 // Services
 import SocketService from './src/services/SocketService';
-import ConnectionService from './src/services/ConnectionService';
 
 const Stack = createNativeStackNavigator();
+export const navigationRef = createNavigationContainerRef();
 
 console.log('╔════════════════════════════════════════╗');
-console.log('║  APP.JS v7.0 - ФИНАЛ                  ║');
+console.log('║  APP.JS v8.0 FIX                       ║');
 console.log('╚════════════════════════════════════════╝');
 
 export default function App() {
+  const isNavigationReady = useRef(false);
+
   useEffect(() => {
     initializeApp();
 
@@ -48,7 +52,7 @@ export default function App() {
    * Инициализация приложения
    */
   const initializeApp = async () => {
-    console.log('[App] 🚀 ИНИЦИАЛИЗАЦИЯ');
+    console.log('[App] ИНИЦИАЛИЗАЦИЯ');
 
     try {
       // 1. Создать notification каналы
@@ -63,12 +67,13 @@ export default function App() {
       // 4. Настроить notifee event handlers
       setupNotifeeHandlers();
 
-      // 5. Ensure foreground service is running if user was logged in
-      await ensureServiceRunning();
+      // NOTE: Foreground service is started in LoginScreen after successful
+      // login/auto-login. Do NOT start it here — the user may not be logged
+      // in yet, and the service is meaningless without a socket connection.
 
-      console.log('[App] ✅ Инициализация завершена');
+      console.log('[App] Инициализация завершена');
     } catch (error) {
-      console.error('[App] ❌ Ошибка инициализации:', error);
+      console.error('[App] Ошибка инициализации:', error);
     }
   };
 
@@ -93,7 +98,7 @@ export default function App() {
       await notifee.createChannel({
         id: 'messages',
         name: 'Сообщения',
-        importance: AndroidImportance.DEFAULT,
+        importance: AndroidImportance.HIGH,
         sound: 'default',
       });
 
@@ -105,9 +110,9 @@ export default function App() {
         sound: 'default',
       });
 
-      console.log('[App] ✅ Каналы созданы');
+      console.log('[App] Каналы созданы');
     } catch (error) {
-      console.error('[App] ❌ Ошибка создания каналов:', error);
+      console.error('[App] Ошибка создания каналов:', error);
     }
   };
 
@@ -126,25 +131,30 @@ export default function App() {
         authStatus === messaging.AuthorizationStatus.PROVISIONAL;
 
       if (enabled) {
-        console.log('[App] ✅ FCM разрешения получены');
+        console.log('[App] FCM разрешения получены');
       } else {
-        console.warn('[App] ⚠️ FCM разрешения НЕ получены');
+        console.warn('[App] FCM разрешения НЕ получены');
       }
     } catch (error) {
-      console.error('[App] ❌ Ошибка запроса разрешений:', error);
+      console.error('[App] Ошибка запроса разрешений:', error);
     }
   };
 
   /**
    * Настройка foreground message handler
-   * (Вызывается когда приложение ОТКРЫТО)
+   * (Вызывается когда приложение ОТКРЫТО и FCM push приходит)
+   *
+   * NOTE: This only fires if @react-native-firebase/messaging intercepts the
+   * FCM message. If MyFirebaseMessagingService intercepts it first (because
+   * it has a higher-priority intent-filter), this handler will NOT fire.
+   * In that case, the native service handles notifications itself.
    */
   const setupForegroundHandler = () => {
     console.log('[App] Настройка foreground handler...');
 
     const unsubscribe = messaging().onMessage(async remoteMessage => {
       console.log('════════════════════════════════════════');
-      console.log('[App FG] 📬 PUSH В FOREGROUND');
+      console.log('[App FG] PUSH В FOREGROUND');
       console.log('[App FG] Data:', remoteMessage.data);
       console.log('════════════════════════════════════════');
 
@@ -166,6 +176,7 @@ export default function App() {
             android: {
               channelId: 'incoming-calls',
               importance: AndroidImportance.HIGH,
+              smallIcon: 'ic_launcher',
               fullScreenAction: {
                 id: 'incoming_call',
                 launchActivity: 'default',
@@ -192,9 +203,9 @@ export default function App() {
           });
 
           console.log('[App FG] Notification shown');
-        } 
+        }
         else if (data.type === 'message') {
-          console.log('[App FG] 💬 Сообщение от:', data.from);
+          console.log('[App FG] Сообщение от:', data.from);
 
           await notifee.displayNotification({
             id: `msg-fg-${data.from}-${Date.now()}`,
@@ -202,6 +213,13 @@ export default function App() {
             body: data.message,
             android: {
               channelId: 'messages',
+              importance: AndroidImportance.HIGH,
+              smallIcon: 'ic_launcher',
+              pressAction: {
+                id: 'default',
+                launchActivity: 'default',
+              },
+              sound: 'default',
             },
             data: {
               type: 'message',
@@ -209,10 +227,10 @@ export default function App() {
             },
           });
 
-          console.log('[App FG] ✅ Сообщение показано');
+          console.log('[App FG] Сообщение показано');
         }
       } catch (error) {
-        console.error('[App FG] ❌ Ошибка:', error);
+        console.error('[App FG] Ошибка:', error);
       }
     });
 
@@ -240,37 +258,21 @@ export default function App() {
   };
 
   /**
-   * Ensure foreground service is running (auto-restart if killed by system)
-   */
-  const ensureServiceRunning = async () => {
-    if (Platform.OS !== 'android') return;
-
-    try {
-      const running = await ConnectionService.isRunning();
-      if (!running) {
-        console.log('[App] Foreground service not running, restarting...');
-        await ConnectionService.start();
-      }
-    } catch (e) {
-      console.warn('[App] Service check failed:', e.message);
-    }
-  };
-
-  /**
    * Обработка нажатия на notification
    */
   const handleNotificationPress = (detail) => {
-    console.log('[App] 👆 Нажатие на notification');
+    console.log('[App] Нажатие на notification');
 
     const {notification} = detail;
     const data = notification?.data || {};
 
     if (data.type === 'incoming_call') {
-      console.log('[App] Открытие входящего звонка');
-      // Навигация обработается автоматически через deep linking
+      console.log('[App] Открытие входящего звонка от:', data.from);
+      // Navigate to IncomingCallScreen if we can
+      navigateToIncomingCall(data);
     } else if (data.type === 'message') {
-      console.log('[App] Открытие чата');
-      // Навигация в чат
+      console.log('[App] Открытие чата с:', data.from);
+      // Chat navigation is handled by HomeScreen through Intent
     }
   };
 
@@ -278,41 +280,64 @@ export default function App() {
    * Обработка action button
    */
   const handleNotificationAction = async (detail) => {
-    console.log('[App] 🎬 Action:', detail.pressAction?.id);
+    console.log('[App] Action:', detail.pressAction?.id);
 
     const {notification, pressAction} = detail;
     const data = notification?.data || {};
 
     if (pressAction?.id === 'answer') {
       console.log('[App] Accept call from:', data.from);
-
-      // Cancel notification
       await notifee.cancelNotification(notification?.id);
-
-      // Accept via Socket
-      if (SocketService.isConnected()) {
-        SocketService.acceptCall(data.from, data.callId);
-      }
+      // Navigate to IncomingCallScreen which will handle accept
+      navigateToIncomingCall(data);
     }
     else if (pressAction?.id === 'reject') {
       console.log('[App] Reject call from:', data.from);
-
-      // Cancel notification
       await notifee.cancelNotification(notification?.id);
-
-      // Reject via Socket
       if (SocketService.isConnected()) {
         SocketService.rejectCall(data.from, data.callId);
       }
-    } 
+    }
     else if (pressAction?.id === 'call_back') {
-      console.log('[App] 📞 Перезвонить:', data.from);
-      // Инициировать звонок
+      console.log('[App] Перезвонить:', data.from);
+    }
+  };
+
+  /**
+   * Navigate to IncomingCallScreen using navigationRef
+   */
+  const navigateToIncomingCall = (data) => {
+    if (!data.from) return;
+    if (navigationRef.isReady()) {
+      navigationRef.navigate('IncomingCall', {
+        from: data.from,
+        isVideo: data.isVideo === 'true' || data.isVideo === true,
+        username: SocketService.savedUsername || '',
+        callId: data.callId || null,
+      });
+    } else {
+      console.warn('[App] Navigation not ready, waiting...');
+      // Retry after navigation is ready
+      const interval = setInterval(() => {
+        if (navigationRef.isReady()) {
+          clearInterval(interval);
+          navigationRef.navigate('IncomingCall', {
+            from: data.from,
+            isVideo: data.isVideo === 'true' || data.isVideo === true,
+            username: SocketService.savedUsername || '',
+            callId: data.callId || null,
+          });
+        }
+      }, 500);
+      // Stop trying after 10s
+      setTimeout(() => clearInterval(interval), 10000);
     }
   };
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef} onReady={() => {
+      isNavigationReady.current = true;
+    }}>
       <Stack.Navigator
         initialRouteName="Login"
         screenOptions={{
@@ -331,8 +356,6 @@ export default function App() {
           }}
         />
         <Stack.Screen name="Chat" component={ChatScreen} />
-        
-        {/* НОВЫЕ ЭКРАНЫ */}
         <Stack.Screen name="Settings" component={SettingsScreen} />
         <Stack.Screen name="AdminPanel" component={AdminPanelScreen} />
       </Stack.Navigator>

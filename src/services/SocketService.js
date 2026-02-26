@@ -851,7 +851,11 @@ class SocketService {
 
   notifyListeners(event, data) {
     if (!this.listeners.has(event)) return;
-    this.listeners.get(event).forEach(callback => {
+    // FIX: Iterate over a shallow copy — once() removes itself from the
+    // original array via splice(), which can skip the next listener if we
+    // iterate the live array.
+    const callbacks = [...this.listeners.get(event)];
+    callbacks.forEach(callback => {
       try {
         callback(data);
       } catch (error) {
