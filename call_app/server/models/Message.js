@@ -1,9 +1,9 @@
-// models/Message.js - ИСПРАВЛЕННАЯ ВЕРСИЯ v7.2
+// models/Message.js - v7.3 (media support + read receipts)
 const mongoose = require('mongoose');
 
 /**
  * ═══════════════════════════════════════════════════════════
- * Message Model v7.2 - ИСПРАВЛЕНО ДЛЯ СТАБИЛЬНОСТИ
+ * Message Model v7.3 - MEDIA SUPPORT + READ RECEIPTS
  * ═══════════════════════════════════════════════════════════
  */
 
@@ -57,8 +57,30 @@ const MessageSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['text', 'system', 'call_notification', 'missed_call'],
+    enum: ['text', 'system', 'call_notification', 'missed_call', 'media'],
     default: 'text',
+  },
+  // [v7.3] Media attachment fields
+  mediaUrl: {
+    type: String,
+    default: null,
+  },
+  mediaType: {
+    type: String,
+    enum: ['image', 'video', null],
+    default: null,
+  },
+  thumbnailUrl: {
+    type: String,
+    default: null,
+  },
+  fileName: {
+    type: String,
+    default: null,
+  },
+  fileSize: {
+    type: Number,
+    default: null,
   },
 }, {
   timestamps: true,

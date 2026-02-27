@@ -17,6 +17,8 @@ const config = {
     // Подавляет предупреждение "event-target-shim ... not listed in exports"
     // react-native-webrtc → event-target-shim не имеет корректного exports поля
     unstable_enablePackageExports: false,
+    // [v8.2] Support Windows platform file extensions (.windows.js)
+    platforms: ['ios', 'android', 'windows'],
   },
   transformer: {
     getTransformOptions: async () => ({

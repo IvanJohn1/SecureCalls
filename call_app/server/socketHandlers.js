@@ -1,5 +1,5 @@
 // socketHandlers.js - Socket.IO event handlers (extracted from server.js)
-// Version: v8.0.0
+// Version: v8.2.0
 
 const crypto = require('crypto');
 
@@ -15,7 +15,6 @@ function initSocketHandlers(io, deps) {
   // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // [FIX v8.0.0] crypto.randomBytes вместо Math.random() (Signal-style secure tokens)
   function generateToken() {
     return crypto.randomBytes(32).toString('hex');
   }
@@ -39,7 +38,6 @@ function initSocketHandlers(io, deps) {
         existingSocket.emit('force_disconnect', {
           message: 'Вход выполнен с другого устройства'
         });
-        // Delay disconnect to allow force_disconnect to be delivered
         setTimeout(() => {
           try { existingSocket.disconnect(); } catch (e) { /* ignore */ }
         }, 500);
@@ -47,7 +45,6 @@ function initSocketHandlers(io, deps) {
 
       activeSessions.delete(existingSocketId);
     }
-    // Always clean up onlineUsers — it will be re-set by the caller
     if (existingSocketId) {
       onlineUsers.delete(username);
     }
@@ -68,12 +65,6 @@ function initSocketHandlers(io, deps) {
     }
   }
 
-  /**
-   * [FIX] Check for pending incoming calls when a user re-authenticates.
-   * This handles the case when the app was killed, FCM push was sent,
-   * user opens the app from notification, auto-logs in, and needs to
-   * receive the incoming_call event again through the socket.
-   */
   function checkPendingCallsForUser(socket, username) {
     for (const [callId, call] of activeCalls.entries()) {
       if (call.to === username && (call.status === 'ringing' || call.status === 'push_sent' || call.status === 'calling')) {
@@ -87,6 +78,40 @@ function initSocketHandlers(io, deps) {
     }
   }
 
+  /**
+   * [v8.2] Deliver unread messages when user reconnects.
+   * After the socket disconnects, messages sent via FCM may not have been
+   * delivered through the socket. When the user re-authenticates, push any
+   * unread messages so the client has them immediately.
+   */
+  async function deliverPendingMessages(socket, username) {
+    try {
+      const unread = await Message.getUnreadMessages(username);
+      if (unread && unread.length > 0) {
+        console.log(`[${socket.id}] 📨 Delivering ${unread.length} pending messages to ${username}`);
+        for (const msg of unread) {
+          socket.emit('new_message', {
+            from: msg.from,
+            message: msg.message,
+            timestamp: msg.timestamp,
+            messageId: msg.messageId,
+            mediaUrl: msg.mediaUrl || null,
+            mediaType: msg.mediaType || null,
+            thumbnailUrl: msg.thumbnailUrl || null,
+            fileName: msg.fileName || null,
+            fileSize: msg.fileSize || null,
+            delivered: true,
+            read: false,
+          });
+          // Mark as delivered
+          await Message.markAsDelivered(msg.messageId);
+        }
+      }
+    } catch (error) {
+      console.error(`[${socket.id}] ❌ deliverPendingMessages error:`, error.message);
+    }
+  }
+
   function broadcastUserOnline(username) {
     io.emit('user_online', { username });
   }
@@ -95,9 +120,6 @@ function initSocketHandlers(io, deps) {
     io.emit('user_offline', { username });
   }
 
-  /**
-   * ОТПРАВКА УВЕДОМЛЕНИЯ О ПРОПУЩЕННОМ ЗВОНКЕ
-   */
   async function sendMissedCallNotification(toUsername, fromUsername, isVideo) {
     try {
       console.log('═══════════════════════════════════════');
@@ -107,10 +129,8 @@ function initSocketHandlers(io, deps) {
       console.log(`Видео: ${isVideo}`);
       console.log('═══════════════════════════════════════');
 
-      // Создать запись в сообщениях
       await Message.createMissedCallNotification(fromUsername, toUsername, isVideo);
 
-      // Отправить push уведомление
       const targetUser = await User.findOne({ username: toUsername });
       if (targetUser && targetUser.fcmToken && firebaseService.isReady()) {
         await firebaseService.sendMissedCallNotification(
@@ -135,6 +155,16 @@ function initSocketHandlers(io, deps) {
 
   io.on('connection', (socket) => {
     console.log(`[${socket.id}] 🔌 Новое подключение`);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // [v8.2] HEARTBEAT: ответ на клиентский ping
+    // Клиент отправляет 'ping' каждые 10с, сервер отвечает 'pong'.
+    // Клиент отслеживает _lastPongTime и при возврате из фона проверяет
+    // свежесть — если pong старый, форсирует переподключение.
+    // ═══════════════════════════════════════════════════════════════════════
+    socket.on('ping', (data) => {
+      socket.emit('pong', { timestamp: data?.timestamp || Date.now() });
+    });
 
     // ═══════════════════════════════════════════════════════════════════════
     // РЕГИСТРАЦИЯ И АВТОРИЗАЦИЯ
@@ -189,7 +219,6 @@ function initSocketHandlers(io, deps) {
       try {
         const user = await User.findByCredentials(username, password);
 
-        // ПРОВЕРКА БАНА
         if (user.isBanned) {
           return socket.emit('login_error', {
             message: `Вы забанены. Причина: ${user.banReason || 'Не указана'}`
@@ -216,8 +245,8 @@ function initSocketHandlers(io, deps) {
         broadcastUserOnline(user.username);
         await broadcastUsersList();
 
-        // [FIX] Re-send pending calls for users who reconnected (e.g. app was killed)
         checkPendingCallsForUser(socket, user.username);
+        deliverPendingMessages(socket, user.username);
 
         console.log(`[${socket.id}] ✅ Вход: ${username} (Админ: ${user.isAdmin})`);
       } catch (error) {
@@ -230,7 +259,6 @@ function initSocketHandlers(io, deps) {
       try {
         const user = await User.findByToken(username, token);
 
-        // ПРОВЕРКА БАНА
         if (user.isBanned) {
           return socket.emit('auth_error', {
             message: `Вы забанены. Причина: ${user.banReason || 'Не указана'}`
@@ -256,8 +284,8 @@ function initSocketHandlers(io, deps) {
         broadcastUserOnline(user.username);
         await broadcastUsersList();
 
-        // [FIX] Re-send pending calls for users who reconnected (e.g. app was killed)
         checkPendingCallsForUser(socket, user.username);
+        deliverPendingMessages(socket, user.username);
 
         console.log(`[${socket.id}] ✅ Авторизация токеном: ${username} (Админ: ${user.isAdmin})`);
       } catch (error) {
@@ -303,7 +331,7 @@ function initSocketHandlers(io, deps) {
     });
 
     // ═══════════════════════════════════════════════════════════════════════
-    // ЗВОНКИ - УЛУЧШЕННАЯ ЛОГИКА С АВТОМАТИЧЕСКИМ MISSED CALL
+    // ЗВОНКИ
     // ═══════════════════════════════════════════════════════════════════════
 
     socket.on('call', async ({ to, isVideo }) => {
@@ -324,20 +352,8 @@ function initSocketHandlers(io, deps) {
 
       const targetSocketId = onlineUsers.get(to);
       const targetSocket = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
-
-      // [FIX v8.1] CRITICAL: check targetSocket.connected, not just existence.
-      //
-      // Without this check, when Android freezes the JS thread and the client
-      // can't respond to ping/pong, the server still has a stale entry in onlineUsers.
-      // The socket OBJECT exists but is already disconnected. Calling .emit() on it
-      // silently drops the packet — the call rings nowhere, the 30s timer fires,
-      // caller gets call_timeout. The FCM fallback path is NEVER triggered.
-      //
-      // With this check: stale socket is detected immediately, onlineUsers is cleaned
-      // up, and the call correctly falls through to the FCM wake-up path below.
       const isOnlineAndConnected = !!(targetSocket && targetSocket.connected);
 
-      // Создаем запись о звонке для отслеживания
       const callData = {
         callId,
         from: session.username,
@@ -348,10 +364,8 @@ function initSocketHandlers(io, deps) {
       };
 
       if (isOnlineAndConnected) {
-        // ПОЛЬЗОВАТЕЛЬ РЕАЛЬНО ОНЛАЙН — маршрутизируем через сокет
         console.log(`[${socket.id}] ✅ ${to} онлайн (connected=true), отправка incoming_call`);
 
-        // Отправляем сигнал о входящем звонке
         targetSocket.emit('incoming_call', {
           callId,
           from: session.username,
@@ -359,25 +373,16 @@ function initSocketHandlers(io, deps) {
         });
 
         callData.status = 'ringing';
-
-        // [FIX v8.0.0] Уведомляем звонящего о callId (нужно для корректного end_call)
         socket.emit('call_initiated', { callId, to });
 
-        // Устанавливаем таймаут для автоматического missed call
         const timeoutId = setTimeout(async () => {
           const call = activeCalls.get(callId);
 
           if (call && call.status === 'ringing') {
-            console.log('═══════════════════════════════════════');
-            console.log(`[CallTimeout] ТАЙМАУТ ЗВОНКА`);
-            console.log(`Call ID: ${callId}`);
-            console.log(`От: ${call.from} → Кому: ${call.to}`);
-            console.log('═══════════════════════════════════════');
+            console.log(`[CallTimeout] ТАЙМАУТ ЗВОНКА: ${callId}`);
 
-            // Отправить missed call уведомление получателю
             await sendMissedCallNotification(call.to, call.from, call.isVideo);
 
-            // Уведомить звонящего
             const callerSocket = io.sockets.sockets.get(socket.id);
             if (callerSocket) {
               callerSocket.emit('call_timeout', {
@@ -386,7 +391,6 @@ function initSocketHandlers(io, deps) {
               });
             }
 
-            // Отменить звонок у принимающего
             const recipientSocket = io.sockets.sockets.get(targetSocketId);
             if (recipientSocket) {
               recipientSocket.emit('call_timeout', {
@@ -394,7 +398,6 @@ function initSocketHandlers(io, deps) {
               });
             }
 
-            // Удалить из активных звонков
             activeCalls.delete(callId);
           }
         }, CALL_TIMEOUT_MS);
@@ -402,16 +405,10 @@ function initSocketHandlers(io, deps) {
         callData.timeoutId = timeoutId;
 
       } else {
-        // ПОЛЬЗОВАТЕЛЬ ОФФЛАЙН или STALE СОКЕТ — отправляем FCM push
-
         if (targetSocketId && !isOnlineAndConnected) {
-          // [FIX v8.1] Stale socket cleanup: the server still had this user in onlineUsers
-          // but their socket is actually disconnected. Clean it up now so future calls
-          // and status broadcasts are correct.
-          console.log(`[${socket.id}] ⚠️ ${to} stale socket (exists but connected=false) — чистим и уходим на FCM`);
+          console.log(`[${socket.id}] ⚠️ ${to} stale socket — чистим и уходим на FCM`);
           onlineUsers.delete(to);
           activeSessions.delete(targetSocketId);
-          // Async DB update — don't await to avoid blocking the call setup
           User.setOnlineStatus(to, false).catch(e =>
             console.error(`[${socket.id}] Ошибка обновления статуса ${to}:`, e.message)
           );
@@ -433,7 +430,6 @@ function initSocketHandlers(io, deps) {
           if (targetUser.fcmToken && firebaseService.isReady()) {
             console.log(`[${socket.id}] Отправка Wake-Up Push для ${to}...`);
 
-            // Отправляем push с максимальным приоритетом
             const pushResult = await firebaseService.sendIncomingCallPush(
               targetUser.fcmToken,
               session.username,
@@ -452,17 +448,14 @@ function initSocketHandlers(io, deps) {
 
               callData.status = 'push_sent';
 
-              // Устанавливаем таймаут для missed call (дольше для оффлайн/FCM пути)
               const timeoutId = setTimeout(async () => {
                 const call = activeCalls.get(callId);
 
                 if (call && (call.status === 'push_sent' || call.status === 'calling')) {
                   console.log(`[CallTimeout] ОФФЛАЙН/FCM ЗВОНОК НЕ ОТВЕЧЕН - ${callId}`);
 
-                  // Отправить missed call уведомление получателю
                   await sendMissedCallNotification(call.to, call.from, call.isVideo);
 
-                  // Уведомить звонящего
                   const callerSocket = io.sockets.sockets.get(socket.id);
                   if (callerSocket) {
                     callerSocket.emit('call_timeout', {
@@ -473,7 +466,7 @@ function initSocketHandlers(io, deps) {
 
                   activeCalls.delete(callId);
                 }
-              }, CALL_TIMEOUT_MS * 2); // Удвоенный таймаут для оффлайн/FCM пути
+              }, CALL_TIMEOUT_MS * 2);
 
               callData.timeoutId = timeoutId;
             } else {
@@ -497,9 +490,7 @@ function initSocketHandlers(io, deps) {
         }
       }
 
-      // Сохраняем звонок в активных
       activeCalls.set(callId, callData);
-
       console.log(`[${socket.id}] Активных звонков: ${activeCalls.size}`);
     });
 
@@ -511,21 +502,13 @@ function initSocketHandlers(io, deps) {
 
       let resolvedCallId = callId;
 
-      // Найти и обновить статус звонка
       if (resolvedCallId && activeCalls.has(resolvedCallId)) {
         const call = activeCalls.get(resolvedCallId);
-
-        if (call.timeoutId) {
-          clearTimeout(call.timeoutId);
-          call.timeoutId = null;
-        }
-
+        if (call.timeoutId) { clearTimeout(call.timeoutId); call.timeoutId = null; }
         call.status = 'answered';
         call.answeredAt = Date.now();
-
         console.log(`[${socket.id}] Время ответа: ${call.answeredAt - call.timestamp}ms`);
       } else {
-        // Fallback: найти по участникам
         for (const [cid, call] of activeCalls.entries()) {
           if (call.from === from && call.to === session.username) {
             if (call.timeoutId) { clearTimeout(call.timeoutId); call.timeoutId = null; }
@@ -556,21 +539,11 @@ function initSocketHandlers(io, deps) {
 
       socket.emit('cancel_call_notification');
 
-      // Найти и завершить звонок
       if (callId && activeCalls.has(callId)) {
         const call = activeCalls.get(callId);
-
-        // Отменить таймаут
-        if (call.timeoutId) {
-          clearTimeout(call.timeoutId);
-        }
-
+        if (call.timeoutId) { clearTimeout(call.timeoutId); }
         call.status = 'rejected';
-
-        // Удалить через 5 секунд
-        setTimeout(() => {
-          activeCalls.delete(callId);
-        }, 5000);
+        setTimeout(() => { activeCalls.delete(callId); }, 5000);
       }
 
       const callerSocketId = onlineUsers.get(from);
@@ -582,39 +555,28 @@ function initSocketHandlers(io, deps) {
       }
     });
 
-    // [FIX v8.0.0] end_call теперь отправляется ТОЛЬКО конкретному собеседнику
     socket.on('end_call', ({ callId, to }) => {
       const session = activeSessions.get(socket.id);
       if (!session) return;
 
       console.log(`[${socket.id}] ${session.username} завершил звонок`);
-
       socket.emit('cancel_call_notification');
 
       let peerUsername = to;
 
-      // Найти и завершить звонок
       if (callId && activeCalls.has(callId)) {
         const call = activeCalls.get(callId);
-
-        if (call.timeoutId) {
-          clearTimeout(call.timeoutId);
-        }
-
+        if (call.timeoutId) { clearTimeout(call.timeoutId); }
         call.status = 'ended';
         call.endedAt = Date.now();
-
-        // Определяем собеседника из записи звонка
         peerUsername = peerUsername || (call.from === session.username ? call.to : call.from);
 
         if (call.answeredAt) {
           const duration = call.endedAt - call.answeredAt;
           console.log(`[${socket.id}] Длительность звонка: ${Math.round(duration / 1000)}с`);
         }
-
         activeCalls.delete(callId);
       } else {
-        // Fallback: ищем активный звонок через перебор (если callId не передан)
         for (const [cid, call] of activeCalls.entries()) {
           if (call.from === session.username || call.to === session.username) {
             peerUsername = peerUsername || (call.from === session.username ? call.to : call.from);
@@ -625,7 +587,6 @@ function initSocketHandlers(io, deps) {
         }
       }
 
-      // [FIX] Отправить call_ended ТОЛЬКО собеседнику
       if (peerUsername) {
         const peerSocketId = onlineUsers.get(peerUsername);
         if (peerSocketId) {
@@ -643,28 +604,20 @@ function initSocketHandlers(io, deps) {
 
       console.log(`[${socket.id}] ${session.username} отменил звонок для ${to}`);
 
-      // Найти звонок
       let call = null;
       if (callId && activeCalls.has(callId)) {
         call = activeCalls.get(callId);
-
-        // Отменить таймаут
-        if (call.timeoutId) {
-          clearTimeout(call.timeoutId);
-        }
-
+        if (call.timeoutId) { clearTimeout(call.timeoutId); }
         call.status = 'cancelled';
       }
 
       const targetSocketId = onlineUsers.get(to);
 
       if (targetSocketId) {
-        // Пользователь онлайн - просто отменить
         const targetSocket = io.sockets.sockets.get(targetSocketId);
         if (targetSocket) {
           targetSocket.emit('call_cancelled', { from: session.username });
 
-          // Отправить push об отмене (чтобы убрать уведомление)
           const targetUser = await User.findOne({ username: to });
           if (targetUser && targetUser.fcmToken && firebaseService.isReady()) {
             await firebaseService.sendCallCancelledNotification(
@@ -674,12 +627,10 @@ function initSocketHandlers(io, deps) {
           }
         }
       } else {
-        // Пользователь оффлайн - отправить missed call
         console.log(`[${socket.id}] Отправка missed call для ${to}`);
         await sendMissedCallNotification(to, session.username, call?.isVideo || false);
       }
 
-      // Удалить звонок
       if (callId) {
         activeCalls.delete(callId);
       }
@@ -689,7 +640,7 @@ function initSocketHandlers(io, deps) {
     // СООБЩЕНИЯ
     // ═══════════════════════════════════════════════════════════════════════
 
-    socket.on('send_message', async ({ to, message, timestamp }) => {
+    socket.on('send_message', async ({ to, message, timestamp, mediaUrl, mediaType, fileName, fileSize, thumbnailUrl }) => {
       const session = activeSessions.get(socket.id);
       if (!session) {
         return socket.emit('error', { message: 'Не авторизован' });
@@ -697,47 +648,64 @@ function initSocketHandlers(io, deps) {
 
       try {
         const messageId = generateMessageId();
-        const newMessage = await Message.create({
+        const msgData = {
           messageId,
           from: session.username,
           to,
-          message,
+          message: message || '',
           timestamp: timestamp || new Date(),
           read: false,
           delivered: false,
-        });
+        };
+
+        // [v8.2] Media message support
+        if (mediaUrl) {
+          msgData.mediaUrl = mediaUrl;
+          msgData.mediaType = mediaType || 'image';
+          msgData.thumbnailUrl = thumbnailUrl || null;
+          msgData.fileName = fileName || null;
+          msgData.fileSize = fileSize || null;
+          msgData.type = 'media';
+        }
+
+        const newMessage = await Message.create(msgData);
 
         const targetSocketId = onlineUsers.get(to);
         const targetSocket_msg = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
-
-        // [FIX E] Stale socket check — same pattern as 'call' handler.
-        // A socket object can exist with connected=false when Android freezes JS.
-        // emit() on dead socket silently drops the packet; FCM fallback never fires.
         const isRecipientOnline = !!(targetSocket_msg && targetSocket_msg.connected);
 
         if (isRecipientOnline) {
           targetSocket_msg.emit('new_message', {
             from: session.username,
-            message,
+            message: message || '',
             timestamp: newMessage.timestamp,
-            messageId
+            messageId,
+            mediaUrl: mediaUrl || null,
+            mediaType: mediaType || null,
+            thumbnailUrl: thumbnailUrl || null,
+            fileName: fileName || null,
+            fileSize: fileSize || null,
+            delivered: true,
+            read: false,
           });
           await Message.markAsDelivered(messageId);
+
+          // [v8.2] Notify sender that message was delivered
+          socket.emit('message_delivered', { messageId, to });
         } else {
           if (targetSocketId && !isRecipientOnline) {
-            // Stale socket cleanup
             console.log(`[${socket.id}] ⚠️ ${to} stale socket в send_message — чистим`);
             onlineUsers.delete(to);
             activeSessions.delete(targetSocketId);
             User.setOnlineStatus(to, false).catch(() => {});
           }
-          // Пользователь оффлайн или stale — отправить Push
+          // Offline — send FCM push
           const targetUser = await User.findOne({ username: to });
           if (targetUser && targetUser.fcmToken && firebaseService.isReady()) {
             await firebaseService.sendMessageNotification(
               targetUser.fcmToken,
               session.username,
-              message,
+              message || (mediaType === 'video' ? 'Видео' : 'Фото'),
               messageId
             );
           }
@@ -745,13 +713,16 @@ function initSocketHandlers(io, deps) {
 
         socket.emit('message_sent', {
           to,
-          message,
+          message: message || '',
           timestamp: newMessage.timestamp,
           messageId,
-          delivered: isRecipientOnline
+          mediaUrl: mediaUrl || null,
+          mediaType: mediaType || null,
+          thumbnailUrl: thumbnailUrl || null,
+          delivered: isRecipientOnline,
         });
 
-        console.log(`[${socket.id}] 💬 ${session.username} → ${to}: "${message.substring(0, 30)}..."`);
+        console.log(`[${socket.id}] 💬 ${session.username} → ${to}: "${(message || '').substring(0, 30)}${mediaUrl ? ' [media]' : ''}"`);
       } catch (error) {
         console.error(`[${socket.id}] ❌ Ошибка отправки сообщения:`, error);
         socket.emit('error', { message: 'Ошибка отправки сообщения' });
@@ -775,11 +746,27 @@ function initSocketHandlers(io, deps) {
       }
     });
 
+    // [v8.2] mark_read now notifies the sender in real-time
     socket.on('mark_read', async ({ from, messageId }) => {
       const session = activeSessions.get(socket.id);
       if (!session) return;
 
-      await Message.markAsRead(from, session.username, messageId);
+      const result = await Message.markAsRead(from, session.username, messageId);
+
+      // Notify the sender that their messages were read
+      if (result && result.modifiedCount > 0) {
+        const senderSocketId = onlineUsers.get(from);
+        if (senderSocketId) {
+          const senderSocket = io.sockets.sockets.get(senderSocketId);
+          if (senderSocket && senderSocket.connected) {
+            senderSocket.emit('messages_read', {
+              by: session.username,
+              messageId: messageId || null,
+              count: result.modifiedCount,
+            });
+          }
+        }
+      }
     });
 
     socket.on('get_unread_count', async () => {
@@ -885,52 +872,36 @@ function initSocketHandlers(io, deps) {
       const session = activeSessions.get(socket.id);
 
       if (session) {
-        // Отменить все активные звонки пользователя
         for (const [callId, call] of activeCalls.entries()) {
           if (call.from === session.username || call.to === session.username) {
             if (call.timeoutId) {
               clearTimeout(call.timeoutId);
             }
 
-        // Если звонок не был отвечен — обработать как пропущенный
-        if (call.status === 'ringing' || call.status === 'calling' || call.status === 'push_sent') {
-          console.log(`[${socket.id}] Обработка незавершённого звонка при отключении: ${call.from} → ${call.to}`);
+            if (call.status === 'ringing' || call.status === 'calling' || call.status === 'push_sent') {
+              console.log(`[${socket.id}] Обработка незавершённого звонка при отключении: ${call.from} → ${call.to}`);
 
-          // [FIX v8.1] Missed call уведомление ВСЕГДА идёт call.to (получателю звонка).
-          //
-          // Старый код вычислял "другого участника" от session.username, что давало
-          // неверный результат когда отключался ПОЛУЧАТЕЛЬ (Bob):
-          //   call.from=Alice, call.to=Bob, session.username=Bob
-          //   recipientUsername = call.from === Bob ? ... = Alice  → НЕВЕРНО
-          //   sendMissedCallNotification('Alice', 'Bob') → "Alice пропустила звонок от Bob"
-          //
-          // Правильно: всегда уведомляем call.to (Bob) что ему звонила Alice.
-          await sendMissedCallNotification(call.to, call.from, call.isVideo);
+              await sendMissedCallNotification(call.to, call.from, call.isVideo);
 
-          // Уведомить звонящего что соединение прервалось (если звонящий не он сам)
-          if (call.from !== session.username) {
-            const callerSocketId = onlineUsers.get(call.from);
-            if (callerSocketId) {
-              const callerSocket = io.sockets.sockets.get(callerSocketId);
-              if (callerSocket && callerSocket.connected) {
-                callerSocket.emit('call_timeout', {
-                  to: call.to,
-                  message: 'Абонент недоступен'
-                });
+              if (call.from !== session.username) {
+                const callerSocketId = onlineUsers.get(call.from);
+                if (callerSocketId) {
+                  const callerSocket = io.sockets.sockets.get(callerSocketId);
+                  if (callerSocket && callerSocket.connected) {
+                    callerSocket.emit('call_timeout', {
+                      to: call.to,
+                      message: 'Абонент недоступен'
+                    });
+                  }
+                }
               }
             }
-          }
-        }
 
             activeCalls.delete(callId);
           }
         }
 
-        // [FIX A] Race condition guard: by the time async DB calls complete,
-        // the user may have already reconnected (e.g. FCM wake-up) and set
-        // a NEW socket mapping in onlineUsers. Only wipe onlineUsers / set
-        // offline if onlineUsers still points to THIS (disconnecting) socket.
-        // activeSessions is per-socket-id and always safe to delete immediately.
+        // [FIX A] Race condition guard
         activeSessions.delete(socket.id);
 
         const isStillOurSocket = onlineUsers.get(session.username) === socket.id;
@@ -940,7 +911,7 @@ function initSocketHandlers(io, deps) {
           broadcastUserOffline(session.username);
           await broadcastUsersList();
         } else {
-          console.log(`[${socket.id}] ⚡ ${session.username} уже переподключился — пропускаем cleanup onlineUsers/offline`);
+          console.log(`[${socket.id}] ⚡ ${session.username} уже переподключился — пропускаем cleanup`);
         }
 
         console.log(`[${socket.id}] 👋 ${session.username} отключился`);
@@ -948,7 +919,6 @@ function initSocketHandlers(io, deps) {
     });
   });
 
-  // Return helper functions that server.js needs (e.g. generateToken for admin)
   return { generateToken };
 }
 
