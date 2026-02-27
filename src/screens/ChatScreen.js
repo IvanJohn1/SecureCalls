@@ -1,4 +1,4 @@
-import React, {useState, useEffect, useRef} from 'react';
+import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   View,
   Text,
@@ -10,25 +10,63 @@ import {
   Platform,
   StatusBar,
   Alert,
+  Linking,
+  Image,
+  ActivityIndicator,
+  Dimensions,
 } from 'react-native';
 import SocketService from '../services/SocketService';
+import {SERVER_URL} from '../config/server.config';
 
 /**
  * ═══════════════════════════════════════════════════════════
- * ChatScreen v9.0 FIX - ИСПРАВЛЕН СКРОЛЛ + ПОРЯДОК
+ * ChatScreen v10.0 — READ RECEIPTS + CLICKABLE LINKS +
+ *                     MEDIA ATTACHMENTS + INLINE PREVIEW
  * ═══════════════════════════════════════════════════════════
  *
- * ИСПРАВЛЕНО:
- * 1. ✅ Сообщения правильно отображаются снизу (новые внизу)
- * 2. ✅ Автопрокрутка к последнему сообщению при загрузке
- * 3. ✅ Автопрокрутка при новом сообщении
- * 4. ✅ scrollToEnd не зависит от замыкания messages
- * 5. ✅ Защита от race conditions
+ * NEW:
+ * 1. Message status: ✓ sent, ✓✓ delivered, ✓✓ (blue) read
+ * 2. URLs in messages are clickable (auto-detected)
+ * 3. Media attachments: photo/video from gallery
+ * 4. Inline image preview (compressed like Telegram)
+ * 5. Video thumbnail with play icon
  */
 
+const {width: SCREEN_WIDTH} = Dimensions.get('window');
+const MAX_IMAGE_WIDTH = SCREEN_WIDTH * 0.6;
+
+// URL regex for auto-detection
+const URL_REGEX = /(https?:\/\/[^\s<>\"\']+)/gi;
+
 console.log('╔════════════════════════════════════════╗');
-console.log('║  ChatScreen v9.0 FIX                  ║');
+console.log('║  ChatScreen v10.0 MEDIA + LINKS        ║');
 console.log('╚════════════════════════════════════════╝');
+
+/**
+ * Parse message text into segments: text and links
+ */
+function parseMessageText(text) {
+  if (!text) return [{type: 'text', value: ''}];
+
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  URL_REGEX.lastIndex = 0;
+  while ((match = URL_REGEX.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({type: 'text', value: text.substring(lastIndex, match.index)});
+    }
+    parts.push({type: 'link', value: match[0]});
+    lastIndex = URL_REGEX.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push({type: 'text', value: text.substring(lastIndex)});
+  }
+
+  return parts.length > 0 ? parts : [{type: 'text', value: text}];
+}
 
 export default function ChatScreen({route, navigation}) {
   const {username, targetUser} = route.params;
@@ -37,31 +75,28 @@ export default function ChatScreen({route, navigation}) {
   const [isTyping, setIsTyping] = useState(false);
   const [isConnected, setIsConnected] = useState(true);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [isUploading, setIsUploading] = useState(false);
 
   const flatListRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const isMountedRef = useRef(true);
+
   useEffect(() => {
-    console.log('[ChatScreen v9.0] 💬 Открыт чат с:', targetUser);
+    console.log('[ChatScreen v10.0] Открыт чат с:', targetUser);
 
     isMountedRef.current = true;
 
-    // Проверка подключения
     if (!SocketService.isConnected()) {
-      console.error('[ChatScreen] ✗ Нет подключения к серверу');
+      console.error('[ChatScreen] Нет подключения к серверу');
       Alert.alert('Ошибка', 'Нет подключения к серверу.', [
         {text: 'OK', onPress: () => navigation.goBack()},
       ]);
       return;
     }
 
-    // Запросить историю сообщений
     SocketService.getMessageHistory(targetUser);
-
-    // Подписаться на события
     setupSocketListeners();
 
-    // Отслеживать статус подключения
     const checkConnection = setInterval(() => {
       const connected = SocketService.isConnected();
       if (isMountedRef.current) {
@@ -84,6 +119,8 @@ export default function ChatScreen({route, navigation}) {
     SocketService.on('new_message', handleNewMessage);
     SocketService.on('typing', handleTyping);
     SocketService.on('message_sent', handleMessageSent);
+    SocketService.on('messages_read', handleMessagesRead);
+    SocketService.on('message_delivered', handleMessageDelivered);
     SocketService.on('disconnect', handleDisconnect);
     SocketService.on('connect', handleReconnect);
   };
@@ -93,6 +130,8 @@ export default function ChatScreen({route, navigation}) {
     SocketService.off('new_message', handleNewMessage);
     SocketService.off('typing', handleTyping);
     SocketService.off('message_sent', handleMessageSent);
+    SocketService.off('messages_read', handleMessagesRead);
+    SocketService.off('message_delivered', handleMessageDelivered);
     SocketService.off('disconnect', handleDisconnect);
     SocketService.off('connect', handleReconnect);
   };
@@ -110,48 +149,38 @@ export default function ChatScreen({route, navigation}) {
     }
   };
 
-  /**
-   * FIX: Обработка истории сообщений
-   * Используем setTimeout с увеличенной задержкой для гарантированного скролла
-   */
   const handleMessageHistory = data => {
     if (!isMountedRef.current) return;
 
     if (data.withUser === targetUser) {
-      console.log(
-        '[ChatScreen] 📜 Получена история:',
-        data.messages.length,
-        'сообщений',
-      );
+      console.log('[ChatScreen] Получена история:', data.messages.length, 'сообщений');
 
       const formattedMessages = data.messages.map(msg => ({
-        id:
-          msg.id ||
-          msg.messageId ||
-          msg.timestamp?.toString() ||
-          Math.random().toString(),
+        id: msg.id || msg.messageId || msg.timestamp?.toString() || Math.random().toString(),
         from: msg.from,
         to: msg.to,
         message: msg.message,
         timestamp: msg.timestamp,
         isMine: msg.from === username,
+        delivered: msg.delivered || false,
+        read: msg.read || false,
+        mediaUrl: msg.mediaUrl || null,
+        mediaType: msg.mediaType || null,
+        thumbnailUrl: msg.thumbnailUrl || null,
+        fileName: msg.fileName || null,
+        fileSize: msg.fileSize || null,
       }));
 
-      // Server returns messages sorted by timestamp DESC (newest first).
-      // inverted FlatList renders index 0 at the bottom, so newest-first is correct as-is.
       setMessages(formattedMessages);
       setIsLoadingHistory(false);
     }
   };
 
-  /**
-   * Обработка нового входящего сообщения
-   */
   const handleNewMessage = data => {
     if (!isMountedRef.current) return;
 
     if (data.from === targetUser) {
-      console.log('[ChatScreen] 💬 Новое сообщение от:', data.from);
+      console.log('[ChatScreen] Новое сообщение от:', data.from);
 
       const newMessage = {
         id: data.messageId || Date.now().toString(),
@@ -160,12 +189,17 @@ export default function ChatScreen({route, navigation}) {
         message: data.message,
         timestamp: data.timestamp || Date.now(),
         isMine: false,
+        delivered: true,
+        read: false,
+        mediaUrl: data.mediaUrl || null,
+        mediaType: data.mediaType || null,
+        thumbnailUrl: data.thumbnailUrl || null,
+        fileName: data.fileName || null,
+        fileSize: data.fileSize || null,
       };
 
-      // Prepend to array — inverted FlatList shows index 0 at the bottom
       setMessages(prev => [newMessage, ...prev]);
 
-      // Отметить как прочитанное
       if (data.messageId) {
         SocketService.markAsRead(targetUser, data.messageId);
       }
@@ -179,13 +213,12 @@ export default function ChatScreen({route, navigation}) {
     }
   };
 
-  /**
-   * Обработка подтверждения отправки
-   */
   const handleMessageSent = data => {
     if (!isMountedRef.current) return;
 
-    console.log('[ChatScreen] ✅ Сообщение отправлено:', data);
+    if (data.to !== targetUser) return;
+
+    console.log('[ChatScreen] Сообщение отправлено:', data.messageId);
 
     const sentMessage = {
       id: data.messageId || Date.now().toString(),
@@ -194,17 +227,45 @@ export default function ChatScreen({route, navigation}) {
       message: data.message,
       timestamp: data.timestamp || Date.now(),
       isMine: true,
+      delivered: data.delivered || false,
+      read: false,
+      mediaUrl: data.mediaUrl || null,
+      mediaType: data.mediaType || null,
+      thumbnailUrl: data.thumbnailUrl || null,
     };
 
-    // Prepend to array — inverted FlatList shows index 0 at the bottom
     setMessages(prev => [sentMessage, ...prev]);
   };
 
-  // scrollToBottom no longer needed — inverted FlatList auto-scrolls to newest
+  // [v10.0] Handle read receipts from server
+  const handleMessagesRead = data => {
+    if (!isMountedRef.current) return;
 
-  /**
-   * Отправка сообщения
-   */
+    if (data.by === targetUser) {
+      console.log('[ChatScreen] Сообщения прочитаны:', targetUser);
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.isMine && !msg.read
+            ? {...msg, read: true, delivered: true}
+            : msg
+        )
+      );
+    }
+  };
+
+  // [v10.0] Handle delivery confirmation
+  const handleMessageDelivered = data => {
+    if (!isMountedRef.current) return;
+
+    if (data.to === targetUser && data.messageId) {
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === data.messageId ? {...msg, delivered: true} : msg
+        )
+      );
+    }
+  };
+
   const sendMessage = () => {
     if (!inputText.trim()) return;
 
@@ -213,7 +274,7 @@ export default function ChatScreen({route, navigation}) {
       return;
     }
 
-    console.log('[ChatScreen] 📤 Отправка:', inputText);
+    console.log('[ChatScreen] Отправка:', inputText);
 
     const sent = SocketService.sendMessage(targetUser, inputText.trim());
     if (!sent) {
@@ -223,6 +284,91 @@ export default function ChatScreen({route, navigation}) {
 
     setInputText('');
     SocketService.sendTyping(targetUser, false);
+  };
+
+  /**
+   * [v10.0] Pick and send media from gallery
+   */
+  const pickMedia = async () => {
+    if (!SocketService.isConnected()) {
+      Alert.alert('Ошибка', 'Нет подключения к серверу');
+      return;
+    }
+
+    try {
+      // Dynamic import to avoid crash if library not installed
+      const ImagePicker = require('react-native-image-picker');
+
+      ImagePicker.launchImageLibrary(
+        {
+          mediaType: 'mixed',
+          maxWidth: 1280,
+          maxHeight: 1280,
+          quality: 0.7, // Compression like Telegram
+          videoQuality: 'medium',
+          includeBase64: false,
+        },
+        async (response) => {
+          if (response.didCancel) return;
+          if (response.errorCode) {
+            console.error('[ChatScreen] ImagePicker error:', response.errorMessage);
+            Alert.alert('Ошибка', 'Не удалось выбрать файл');
+            return;
+          }
+
+          const asset = response.assets?.[0];
+          if (!asset) return;
+
+          console.log('[ChatScreen] Выбрано:', asset.type, asset.fileSize, 'байт');
+
+          setIsUploading(true);
+          try {
+            const formData = new FormData();
+            formData.append('media', {
+              uri: asset.uri,
+              type: asset.type || 'image/jpeg',
+              name: asset.fileName || `media_${Date.now()}.jpg`,
+            });
+
+            const uploadRes = await fetch(`${SERVER_URL}/upload/media`, {
+              method: 'POST',
+              body: formData,
+              headers: {
+                'Content-Type': 'multipart/form-data',
+              },
+            });
+
+            const uploadData = await uploadRes.json();
+
+            if (uploadData.success) {
+              console.log('[ChatScreen] Загружено:', uploadData.mediaUrl);
+
+              SocketService.sendMediaMessage(
+                targetUser,
+                uploadData.mediaUrl,
+                uploadData.mediaType,
+                uploadData.fileName,
+                uploadData.fileSize,
+                null, // thumbnailUrl — server could generate
+              );
+            } else {
+              Alert.alert('Ошибка', 'Не удалось загрузить файл');
+            }
+          } catch (uploadError) {
+            console.error('[ChatScreen] Upload error:', uploadError);
+            Alert.alert('Ошибка', 'Ошибка загрузки файла');
+          } finally {
+            setIsUploading(false);
+          }
+        }
+      );
+    } catch (e) {
+      console.warn('[ChatScreen] react-native-image-picker не установлен:', e.message);
+      Alert.alert(
+        'Медиафайлы',
+        'Для отправки фото и видео установите react-native-image-picker:\nnpm install react-native-image-picker'
+      );
+    }
   };
 
   const handleTextChange = text => {
@@ -243,7 +389,111 @@ export default function ChatScreen({route, navigation}) {
   };
 
   /**
-   * Рендер сообщения
+   * Open URL in browser
+   */
+  const openLink = useCallback((url) => {
+    Linking.canOpenURL(url).then(supported => {
+      if (supported) {
+        Linking.openURL(url);
+      } else {
+        Alert.alert('Ошибка', `Не удалось открыть: ${url}`);
+      }
+    });
+  }, []);
+
+  /**
+   * Render message text with clickable links
+   */
+  const renderMessageTextWithLinks = (text, isMine) => {
+    const parts = parseMessageText(text);
+
+    return parts.map((part, index) => {
+      if (part.type === 'link') {
+        return (
+          <Text
+            key={index}
+            style={[
+              styles.messageText,
+              isMine ? styles.myMessageText : styles.theirMessageText,
+              styles.linkText,
+            ]}
+            onPress={() => openLink(part.value)}>
+            {part.value}
+          </Text>
+        );
+      }
+      return (
+        <Text
+          key={index}
+          style={[
+            styles.messageText,
+            isMine ? styles.myMessageText : styles.theirMessageText,
+          ]}>
+          {part.value}
+        </Text>
+      );
+    });
+  };
+
+  /**
+   * Render inline media preview
+   */
+  const renderMediaPreview = (item) => {
+    if (!item.mediaUrl) return null;
+
+    const fullUrl = item.mediaUrl.startsWith('http')
+      ? item.mediaUrl
+      : `${SERVER_URL}${item.mediaUrl}`;
+
+    if (item.mediaType === 'video') {
+      return (
+        <TouchableOpacity
+          style={styles.mediaContainer}
+          onPress={() => openLink(fullUrl)}>
+          <View style={styles.videoPlaceholder}>
+            <Text style={styles.videoPlayIcon}>▶</Text>
+            <Text style={styles.videoLabel}>Видео</Text>
+            {item.fileSize && (
+              <Text style={styles.fileSizeLabel}>
+                {(item.fileSize / (1024 * 1024)).toFixed(1)} МБ
+              </Text>
+            )}
+          </View>
+        </TouchableOpacity>
+      );
+    }
+
+    // Image preview — inline like Telegram
+    return (
+      <TouchableOpacity
+        style={styles.mediaContainer}
+        onPress={() => openLink(fullUrl)}>
+        <Image
+          source={{uri: fullUrl}}
+          style={styles.mediaImage}
+          resizeMode="cover"
+        />
+      </TouchableOpacity>
+    );
+  };
+
+  /**
+   * Render message status indicators (checkmarks)
+   */
+  const renderMessageStatus = (item) => {
+    if (!item.isMine) return null;
+
+    if (item.read) {
+      return <Text style={styles.statusRead}>✓✓</Text>;
+    }
+    if (item.delivered) {
+      return <Text style={styles.statusDelivered}>✓✓</Text>;
+    }
+    return <Text style={styles.statusSent}>✓</Text>;
+  };
+
+  /**
+   * Render message bubble
    */
   const renderMessage = ({item}) => {
     const isMine = item.isMine || item.from === username;
@@ -252,6 +502,8 @@ export default function ChatScreen({route, navigation}) {
       hour: '2-digit',
       minute: '2-digit',
     });
+
+    const hasMedia = !!item.mediaUrl;
 
     return (
       <View
@@ -263,27 +515,33 @@ export default function ChatScreen({route, navigation}) {
           style={[
             styles.messageBubble,
             isMine ? styles.myMessageBubble : styles.theirMessageBubble,
+            hasMedia && styles.mediaBubble,
           ]}>
-          <Text
-            style={[
-              styles.messageText,
-              isMine ? styles.myMessageText : styles.theirMessageText,
-            ]}>
-            {item.message}
-          </Text>
-          <Text
-            style={[
-              styles.timestamp,
-              isMine ? styles.myTimestamp : styles.theirTimestamp,
-            ]}>
-            {timeString}
-          </Text>
+          {/* Media preview */}
+          {renderMediaPreview(item)}
+
+          {/* Message text with clickable links */}
+          {item.message && !(hasMedia && (item.message === '📷 Фото' || item.message === '📹 Видео')) && (
+            <Text>
+              {renderMessageTextWithLinks(item.message, isMine)}
+            </Text>
+          )}
+
+          {/* Timestamp + status row */}
+          <View style={styles.timestampRow}>
+            <Text
+              style={[
+                styles.timestamp,
+                isMine ? styles.myTimestamp : styles.theirTimestamp,
+              ]}>
+              {timeString}
+            </Text>
+            {renderMessageStatus(item)}
+          </View>
         </View>
       </View>
     );
   };
-
-  // handleContentSizeChange no longer needed — inverted FlatList handles this
 
   return (
     <KeyboardAvoidingView
@@ -325,8 +583,24 @@ export default function ChatScreen({route, navigation}) {
         />
       )}
 
+      {/* Upload indicator */}
+      {isUploading && (
+        <View style={styles.uploadingBar}>
+          <ActivityIndicator size="small" color="#667eea" />
+          <Text style={styles.uploadingText}>Загрузка файла...</Text>
+        </View>
+      )}
+
       {/* Input Area */}
       <View style={styles.inputContainer}>
+        {/* Attachment button */}
+        <TouchableOpacity
+          style={styles.attachButton}
+          onPress={pickMedia}
+          disabled={isUploading}>
+          <Text style={styles.attachButtonText}>📎</Text>
+        </TouchableOpacity>
+
         <TextInput
           style={styles.input}
           placeholder="Введите сообщение..."
@@ -406,7 +680,7 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
   },
   messageContainer: {
-    marginBottom: 15,
+    marginBottom: 10,
   },
   myMessageContainer: {
     alignItems: 'flex-end',
@@ -418,6 +692,11 @@ const styles = StyleSheet.create({
     maxWidth: '75%',
     padding: 12,
     borderRadius: 15,
+  },
+  mediaBubble: {
+    padding: 4,
+    paddingBottom: 8,
+    overflow: 'hidden',
   },
   myMessageBubble: {
     backgroundColor: '#667eea',
@@ -437,9 +716,19 @@ const styles = StyleSheet.create({
   theirMessageText: {
     color: '#333',
   },
+  linkText: {
+    textDecorationLine: 'underline',
+    fontWeight: '500',
+  },
+  timestampRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginTop: 4,
+    gap: 4,
+  },
   timestamp: {
     fontSize: 11,
-    marginTop: 5,
   },
   myTimestamp: {
     color: 'rgba(255, 255, 255, 0.7)',
@@ -449,6 +738,67 @@ const styles = StyleSheet.create({
     color: '#999',
     textAlign: 'left',
   },
+  // Message status indicators
+  statusSent: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.5)',
+  },
+  statusDelivered: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.7)',
+  },
+  statusRead: {
+    fontSize: 12,
+    color: '#90CAF9', // Blue checkmarks like WhatsApp
+  },
+  // Media
+  mediaContainer: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+  mediaImage: {
+    width: MAX_IMAGE_WIDTH,
+    height: MAX_IMAGE_WIDTH * 0.75,
+    borderRadius: 12,
+    backgroundColor: '#e0e0e0',
+  },
+  videoPlaceholder: {
+    width: MAX_IMAGE_WIDTH,
+    height: MAX_IMAGE_WIDTH * 0.5,
+    backgroundColor: '#333',
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoPlayIcon: {
+    fontSize: 40,
+    color: '#fff',
+  },
+  videoLabel: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    marginTop: 4,
+  },
+  fileSizeLabel: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.5)',
+    marginTop: 2,
+  },
+  // Upload indicator
+  uploadingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 8,
+    backgroundColor: '#E8EAF6',
+  },
+  uploadingText: {
+    fontSize: 13,
+    color: '#667eea',
+    marginLeft: 8,
+  },
+  // Input area
   inputContainer: {
     flexDirection: 'row',
     padding: 10,
@@ -456,6 +806,15 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
     alignItems: 'flex-end',
+  },
+  attachButton: {
+    width: 40,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  attachButtonText: {
+    fontSize: 24,
   },
   input: {
     flex: 1,

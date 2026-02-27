@@ -10,18 +10,22 @@ export const SERVER_URL = 'https://call.n8n-auto.space';
 export const WS_URL = 'wss://call.n8n-auto.space';
 export const HTTP_URL = 'https://call.n8n-auto.space';
 
+// Определение платформы
+import {Platform} from 'react-native';
+const currentPlatform = Platform.OS; // 'android', 'ios', 'windows'
+
 // Конфигурация Socket.IO
 export const SOCKET_CONFIG = {
   reconnection: true,
   reconnectionDelay: 1000,
   reconnectionDelayMax: 5000,
-  reconnectionAttempts: 10,
+  reconnectionAttempts: Infinity, // [FIX] was 10 — must be Infinity for reliable reconnect
   transports: ['websocket', 'polling'],
   timeout: 20000,
   forceNew: false,
   autoConnect: true,
   query: {
-    platform: 'android',
+    platform: currentPlatform,
   },
 };
 

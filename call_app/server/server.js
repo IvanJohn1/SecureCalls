@@ -59,6 +59,37 @@ const apkUpload = multer({
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// [v8.2] MEDIA UPLOAD — для фото/видео вложений в чат
+// ═══════════════════════════════════════════════════════════════════════════════
+const mediaDir = path.join(__dirname, 'uploads', 'media');
+if (!fs.existsSync(mediaDir)) {
+  fs.mkdirSync(mediaDir, { recursive: true });
+}
+
+const mediaStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, mediaDir),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.jpg';
+    const uniqueName = `${Date.now()}_${Math.random().toString(36).substring(2, 10)}${ext}`;
+    cb(null, uniqueName);
+  }
+});
+
+const mediaUpload = multer({
+  storage: mediaStorage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|webp|mp4|mov|avi|webm|3gp/;
+    const ext = path.extname(file.originalname).toLowerCase().replace('.', '');
+    if (allowedTypes.test(ext) || file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Только изображения и видео разрешены'));
+    }
+  }
+});
+
 // Метаданные текущего APK (хранятся в JSON файле)
 const apkMetaPath = path.join(uploadsDir, 'apk-meta.json');
 
@@ -97,6 +128,12 @@ app.use(cors());
 app.use(compression());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// [v8.2] Статическая раздача медиафайлов
+app.use('/media', express.static(mediaDir, {
+  maxAge: '30d',
+  immutable: true,
+}));
 
 // Логирование запросов
 app.use((req, res, next) => {
@@ -1417,6 +1454,37 @@ function isValidAdminSession(sessionId) {
 }
 
 // Вход в админ панель
+// ═══════════════════════════════════════════════════════════════════════════════
+// [v8.2] MEDIA UPLOAD API — загрузка фото/видео для чата
+// ═══════════════════════════════════════════════════════════════════════════════
+app.post('/upload/media', mediaUpload.single('media'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Файл не загружен' });
+    }
+
+    const isVideo = req.file.mimetype.startsWith('video/');
+    const mediaUrl = `/media/${req.file.filename}`;
+
+    console.log(`[Upload] Медиафайл загружен: ${req.file.filename} (${(req.file.size / 1024).toFixed(1)} KB)`);
+
+    res.json({
+      success: true,
+      mediaUrl,
+      mediaType: isVideo ? 'video' : 'image',
+      fileName: req.file.originalname,
+      fileSize: req.file.size,
+    });
+  } catch (error) {
+    console.error('[Upload] Ошибка:', error);
+    res.status(500).json({ error: 'Ошибка загрузки файла' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN API
+// ═══════════════════════════════════════════════════════════════════════════════
+
 app.post('/admin/login', (req, res) => {
   const { password } = req.body;
 
