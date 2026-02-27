@@ -141,45 +141,64 @@ export default function LoginScreen({navigation}) {
    * - Checks AsyncStorage flag to avoid prompting repeatedly
    * - Only shows alert once; user can re-trigger from permission banner
    */
+  /**
+   * [FIX v13.0] Проверка разрешения USE_FULL_SCREEN_INTENT через нативный модуль.
+   *
+   * ИСПРАВЛЕНО: Убран флаг 'fullscreen_intent_prompted' в AsyncStorage.
+   * Старый код проверял только факт ПОКАЗА диалога, а не реальный статус разрешения.
+   * После переустановки / сброса флаг в AsyncStorage очищался, разрешение нет — и
+   * повторная проверка не выполнялась на следующих запусках.
+   *
+   * Теперь: при каждом старте вызываем canUseFullScreenIntent() из нативного модуля.
+   */
   const requestFullScreenIntentPermission = async () => {
     if (Platform.Version < 34) {
+      console.log('[LoginScreen] Android < 14, USE_FULL_SCREEN_INTENT не требуется');
       return true;
     }
 
     console.log('[LoginScreen] 📱 Проверка USE_FULL_SCREEN_INTENT (Android 14+)');
 
     try {
-      // Check if we already prompted the user
-      const alreadyPrompted = await AsyncStorage.getItem('fullscreen_intent_prompted');
-      if (alreadyPrompted === 'true') {
-        console.log('[LoginScreen] ✅ USE_FULL_SCREEN_INTENT уже был запрошен ранее, пропускаем');
+      const {CallNotificationModule} = NativeModules;
+
+      if (CallNotificationModule && CallNotificationModule.canUseFullScreenIntent) {
+        const canUse = await CallNotificationModule.canUseFullScreenIntent();
+        console.log('[LoginScreen] canUseFullScreenIntent =', canUse);
+
+        if (canUse) {
+          console.log('[LoginScreen] ✅ USE_FULL_SCREEN_INTENT разрешение выдано');
+          return true;
+        }
+
+        // Разрешение не выдано — показываем диалог с переходом в настройки
+        console.warn('[LoginScreen] ⚠️ USE_FULL_SCREEN_INTENT НЕ выдано — показываем диалог');
+        Alert.alert(
+          'Требуется разрешение',
+          'Для показа входящих звонков поверх экрана блокировки необходимо разрешение "Полноэкранные уведомления".\n\nНастройки → Приложения → SecureCall → Уведомления → Полноэкранные уведомления: ВКЛ.',
+          [
+            {text: 'Позже', style: 'cancel'},
+            {
+              text: 'Открыть настройки',
+              onPress: () => {
+                if (CallNotificationModule.openFullScreenIntentSettings) {
+                  CallNotificationModule.openFullScreenIntentSettings();
+                } else {
+                  Linking.openSettings();
+                }
+              },
+            },
+          ],
+        );
+        return false;
+      } else {
+        // Нативный метод недоступен (старый модуль без canUseFullScreenIntent)
+        console.warn('[LoginScreen] canUseFullScreenIntent недоступен в нативном модуле');
         return true;
       }
-
-      // Mark as prompted so we don't ask again
-      await AsyncStorage.setItem('fullscreen_intent_prompted', 'true');
-
-      Alert.alert(
-        'Требуется разрешение',
-        'Для показа входящих звонков поверх экрана блокировки необходимо предоставить разрешение "Полноэкранные уведомления".\n\nОткройте настройки приложения → Уведомления → Полноэкранные уведомления.',
-        [
-          {
-            text: 'Позже',
-            style: 'cancel',
-          },
-          {
-            text: 'Открыть настройки',
-            onPress: () => {
-              Linking.openSettings();
-            },
-          },
-        ]
-      );
-
-      return true;
     } catch (error) {
-      console.error('[LoginScreen] ❌ Ошибка запроса USE_FULL_SCREEN_INTENT:', error);
-      return false;
+      console.error('[LoginScreen] ❌ Ошибка проверки USE_FULL_SCREEN_INTENT:', error);
+      return true; // Не блокируем работу при ошибке
     }
   };
 

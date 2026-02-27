@@ -11,6 +11,7 @@ import androidx.core.app.NotificationCompat;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
+import com.facebook.react.bridge.Promise;   // <--- ДОБАВЛЕННЫЙ ИМПОРТ
 import android.util.Log;
 
 /**
@@ -165,6 +166,64 @@ public class CallNotificationModule extends ReactContextBaseJavaModule {
             Log.d(TAG, "✓ Notification отменен");
         } catch (Exception e) {
             Log.e(TAG, "❌ Ошибка отмены notification: " + e.getMessage());
+        }
+    }
+
+    /**
+     * [FIX v2.0] Проверить, выдано ли разрешение USE_FULL_SCREEN_INTENT.
+     *
+     * На Android 14+ (API 34+) это runtime-разрешение, которое пользователь
+     * может отозвать. JS-сторона должна проверять его при каждом старте
+     * вместо хранения флага в AsyncStorage.
+     *
+     * Возвращает: true — разрешение выдано, false — нет (нужно вести в настройки).
+     */
+    @ReactMethod
+    public void canUseFullScreenIntent(Promise promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // API 34+
+                NotificationManager nm = reactContext.getSystemService(NotificationManager.class);
+                boolean canUse = nm != null && nm.canUseFullScreenIntent();
+                Log.d(TAG, "canUseFullScreenIntent: " + canUse);
+                promise.resolve(canUse);
+            } else {
+                // Ниже API 34 разрешение не требуется
+                promise.resolve(true);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Ошибка canUseFullScreenIntent: " + e.getMessage());
+            promise.resolve(true); // Не блокируем при ошибке
+        }
+    }
+
+    /**
+     * [FIX v2.0] Открыть настройки USE_FULL_SCREEN_INTENT для этого приложения.
+     *
+     * Прямой переход на экран настроек полноэкранных уведомлений (Android 14+).
+     * На старых версиях — fallback на общие настройки приложения.
+     */
+    @ReactMethod
+    public void openFullScreenIntentSettings(Promise promise) {
+        try {
+            android.content.Intent intent;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // API 34+
+                intent = new android.content.Intent(
+                    android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                    android.net.Uri.parse("package:" + reactContext.getPackageName())
+                );
+            } else {
+                intent = new android.content.Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    android.net.Uri.parse("package:" + reactContext.getPackageName())
+                );
+            }
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            reactContext.startActivity(intent);
+            Log.d(TAG, "✓ Открыты настройки USE_FULL_SCREEN_INTENT");
+            promise.resolve(true);
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Ошибка открытия настроек: " + e.getMessage());
+            promise.reject("SETTINGS_ERROR", e.getMessage(), e);
         }
     }
 }

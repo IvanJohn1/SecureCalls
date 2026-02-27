@@ -101,7 +101,8 @@ export default function HomeScreen({route, navigation}) {
     console.log('[HomeScreen] Intent data:', JSON.stringify(data));
 
     if (data && data.from) {
-      // Отменяем уведомление — пользователь уже тапнул на него
+      // Пользователь тапнул на уведомление / fullScreenIntent поднял Activity.
+      // Здесь отменяем уведомление — оно уже выполнило своё назначение.
       const {CallNotificationModule} = NativeModules;
       if (CallNotificationModule) {
         CallNotificationModule.cancelIncomingCallNotification();
@@ -220,12 +221,46 @@ export default function HomeScreen({route, navigation}) {
     console.log('[HomeScreen] AppState:', AppState.currentState);
     console.log('[HomeScreen] isMounted:', isMountedRef.current);
 
-    // Отменяем нативное уведомление — оно могло быть показано SocketService
-    // пока приложение было в фоне, теперь JS его обработает сам
+    // ═══════════════════════════════════════════════════════════
+    // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ Android 15:
+    //
+    // Если приложение НЕ активно (background/inactive), SocketService уже
+    // показал нативное уведомление с fullScreenIntent. Мы НЕ должны его
+    // отменять и НЕ должны делать JS-навигацию прямо сейчас.
+    //
+    // Почему: fullScreenIntent работает асинхронно — Android ставит его
+    // в очередь. Если отменить уведомление немедленно (как делалось раньше),
+    // fullScreenIntent уничтожается до того, как Android успевает его показать.
+    // На Samsung Android 13 это не было проблемой — OEM сам агрессивно
+    // поднимал Activity. На stock Android 14/15 — единственный механизм
+    // это fullScreenIntent, и его нельзя трогать.
+    //
+    // Правильный поток (background):
+    //   1. Уведомление + fullScreenIntent остаётся
+    //   2. Android показывает экран блокировки со звонком / поднимает окно
+    //   3. Пользователь видит звонок → тапает
+    //   4. MainActivity.onNewIntent → DeviceEventEmitter('incomingCall')
+    //   5. handleIncomingCallFromIntent → navigate + cancel notification
+    //
+    // Правильный поток (foreground):
+    //   1. Уведомление было показано превентивно (listenerCount мог быть 0)
+    //   2. Отменяем и навигируем прямо в JS — окно уже видно
+    // ═══════════════════════════════════════════════════════════
+    const isAppActive = AppState.currentState === 'active';
+
+    if (!isAppActive) {
+      // Приложение в фоне — уведомление с fullScreenIntent само разбудит экран.
+      // Ни в коем случае не отменяем уведомление здесь.
+      console.log('[HomeScreen] ⚠️ App НЕ активен — не трогаем уведомление, ждём fullScreenIntent');
+      console.log('[HomeScreen] AppState:', AppState.currentState, '— навигацию пропускаем');
+      return;
+    }
+
+    // Приложение видимо — отменяем превентивное уведомление и навигируем
     const {CallNotificationModule} = NativeModules;
     if (CallNotificationModule) {
       CallNotificationModule.cancelIncomingCallNotification();
-      console.log('[HomeScreen] ✅ Нативное уведомление отменено');
+      console.log('[HomeScreen] ✅ Нативное уведомление отменено (app active)');
     }
 
     navigation.navigate('IncomingCall', {
@@ -234,7 +269,7 @@ export default function HomeScreen({route, navigation}) {
       username: username,
       callId: data.callId,
     });
-    console.log('[HomeScreen] ✅ Навигация на IncomingCall выполнена');
+    console.log('[HomeScreen] ✅ Навигация на IncomingCall выполнена (app active)');
   };
 
   const handleForceDisconnect = data => {

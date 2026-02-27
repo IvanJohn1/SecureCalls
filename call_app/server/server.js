@@ -17,8 +17,11 @@ const io = require('socket.io')(server, {
     methods: ['GET', 'POST']
   },
   transports: ['websocket', 'polling'],
-  pingTimeout: parseInt(process.env.WS_PING_TIMEOUT) || 60000,
-  pingInterval: parseInt(process.env.WS_PING_INTERVAL) || 25000,
+  // [FIX v8.1] Reduced from 60000/25000 → detects dead sockets in ~30s instead of ~85s.
+  // Android freezes JS thread in background → client can't pong → server must detect stale
+  // sockets quickly so FCM fallback activates before incoming calls are missed.
+  pingTimeout: parseInt(process.env.WS_PING_TIMEOUT) || 20000,
+  pingInterval: parseInt(process.env.WS_PING_INTERVAL) || 10000,
 });
 
 const cors = require('cors');
@@ -111,8 +114,9 @@ const adminSessions = new Map(); // sessionId -> { authenticated: true, username
 // ═══════════════════════════════════════════════════════════════════════════════
 const activeCalls = new Map(); // callId -> { from, to, isVideo, timestamp, status, timeoutId }
 
-// Таймаут для автоматического missed call (30 секунд)
-const CALL_TIMEOUT_MS = 30000;
+// [FIX v8.1] Increased from 30s → 45s to allow time for FCM delivery + app startup + socket reconnect.
+// The old 30s was too tight: FCM latency alone can be 5-15s, plus app init + auth.
+const CALL_TIMEOUT_MS = 45000;
 
 console.log('╔═══════════════════════════════════╗');
 console.log('║  SecureCall Server v7.2.1 FULL   ║');
