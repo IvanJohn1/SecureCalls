@@ -123,8 +123,13 @@ class SocketService {
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
         timeout: 10000,
-        pingTimeout: 60000,
-        pingInterval: 25000,
+        // [FIX D] These MUST match server-side pingTimeout/pingInterval.
+        // Server: pingInterval=10000, pingTimeout=20000 → kills dead socket in ~30s.
+        // Old client values (60000/25000) made socket.io-client think the
+        // connection was alive for up to 60s after the server already killed it,
+        // delaying auto-reconnect and the FCM wake-up cycle.
+        pingTimeout: 20000,
+        pingInterval: 10000,
         autoConnect: true,
         forceNew: false,
       });
@@ -401,11 +406,14 @@ class SocketService {
   startKeepalive() {
     this.stopKeepalive();
 
+    // Application-level keepalive — supplements socket.io transport pings.
+    // Interval matches server pingInterval so the JS thread stays active
+    // and native keepalive packets arrive regularly.
     this.keepaliveInterval = setInterval(() => {
       if (this.socket?.connected) {
         this.socket.emit('ping', {timestamp: Date.now()});
       }
-    }, 25000);
+    }, 10000); // [FIX D] was 25000, now matches server pingInterval
 
     console.log('[SocketService] Keepalive started');
   }

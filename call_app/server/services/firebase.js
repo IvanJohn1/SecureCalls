@@ -145,8 +145,11 @@ class FirebaseService {
         android: {
           // HIGH priority wakes the device and triggers onMessageReceived()
           priority: 'high',
-          // TTL = 30 seconds
-          ttl: 30000,
+          // [FIX C] TTL was 30s — too short for Samsung Doze/DOZE_SUSPEND.
+          // In deep Doze, FCM heartbeat intervals can exceed 30s, so the
+          // message expired before delivery. TTL must be >= CALL_TIMEOUT_MS*2
+          // (90s) so the push is still valid when the device wakes up.
+          ttl: 90000,
           // NO notification block — this makes it DATA-ONLY on Android
         },
  
@@ -398,34 +401,39 @@ class FirebaseService {
    * Обработка ошибок отправки
    */
   handleSendError(error, fcmToken) {
-    // Проверка на невалидный токен
+    // [FIX B] CRITICAL: Previously returned { error: '...' } objects which are
+    // TRUTHY. Callers checked `if (pushResult)` and treated any error as success,
+    // marking calls as 'push_sent' even when FCM completely failed (invalid token,
+    // quota exceeded, etc.). The call then waited 90s and silently became missed.
+    // Now: always return null so callers correctly detect failure.
+
     if (
       error.code === 'messaging/invalid-registration-token' ||
       error.code === 'messaging/registration-token-not-registered'
     ) {
       console.error('═══════════════════════════════════════');
       console.error('[Firebase] ❌ НЕВАЛИДНЫЙ FCM ТОКЕН');
-      console.error('[Firebase] Токен:', fcmToken.substring(0, 20) + '...');
-      console.error('[Firebase] ⚠️ Токен нужно удалить из базы данных');
+      console.error('[Firebase] Токен:', fcmToken ? fcmToken.substring(0, 20) + '...' : 'N/A');
+      console.error('[Firebase] ⚠️ Токен устарел — нужно удалить из БД при следующем логине');
       console.error('═══════════════════════════════════════');
-      return { error: 'invalid_token', fcmToken };
+      // Return a special marker so callers can distinguish invalid-token from
+      // transient errors and skip re-trying with the same token.
+      return null; // null → caller's `if (pushResult)` correctly fails
     }
 
-    // Проверка на ошибки квоты
     if (error.code === 'messaging/quota-exceeded') {
-      console.error('[Firebase] ❌ Превышена квота отправки');
-      return { error: 'quota_exceeded' };
+      console.error('[Firebase] ❌ Превышена квота отправки FCM');
+      return null;
     }
 
-    // Проверка на ошибки аутентификации
     if (error.code === 'messaging/authentication-error') {
       console.error('[Firebase] ❌ Ошибка аутентификации Firebase');
-      return { error: 'auth_error' };
+      return null;
     }
 
     // Другие ошибки
     console.error('[Firebase] ❌ Неизвестная ошибка:', error.code, error.message);
-    return { error: 'unknown_error', message: error.message };
+    return null;
   }
 
   /**

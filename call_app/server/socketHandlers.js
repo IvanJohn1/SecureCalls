@@ -708,20 +708,30 @@ function initSocketHandlers(io, deps) {
         });
 
         const targetSocketId = onlineUsers.get(to);
+        const targetSocket_msg = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
 
-        if (targetSocketId) {
-          const targetSocket = io.sockets.sockets.get(targetSocketId);
-          if (targetSocket) {
-            targetSocket.emit('new_message', {
-              from: session.username,
-              message,
-              timestamp: newMessage.timestamp,
-              messageId
-            });
-            await Message.markAsDelivered(messageId);
-          }
+        // [FIX E] Stale socket check — same pattern as 'call' handler.
+        // A socket object can exist with connected=false when Android freezes JS.
+        // emit() on dead socket silently drops the packet; FCM fallback never fires.
+        const isRecipientOnline = !!(targetSocket_msg && targetSocket_msg.connected);
+
+        if (isRecipientOnline) {
+          targetSocket_msg.emit('new_message', {
+            from: session.username,
+            message,
+            timestamp: newMessage.timestamp,
+            messageId
+          });
+          await Message.markAsDelivered(messageId);
         } else {
-          // Пользователь оффлайн - отправить Push
+          if (targetSocketId && !isRecipientOnline) {
+            // Stale socket cleanup
+            console.log(`[${socket.id}] ⚠️ ${to} stale socket в send_message — чистим`);
+            onlineUsers.delete(to);
+            activeSessions.delete(targetSocketId);
+            User.setOnlineStatus(to, false).catch(() => {});
+          }
+          // Пользователь оффлайн или stale — отправить Push
           const targetUser = await User.findOne({ username: to });
           if (targetUser && targetUser.fcmToken && firebaseService.isReady()) {
             await firebaseService.sendMessageNotification(
@@ -738,7 +748,7 @@ function initSocketHandlers(io, deps) {
           message,
           timestamp: newMessage.timestamp,
           messageId,
-          delivered: !!targetSocketId
+          delivered: isRecipientOnline
         });
 
         console.log(`[${socket.id}] 💬 ${session.username} → ${to}: "${message.substring(0, 30)}..."`);
@@ -916,11 +926,22 @@ function initSocketHandlers(io, deps) {
           }
         }
 
-        await User.setOnlineStatus(session.username, false);
-        onlineUsers.delete(session.username);
+        // [FIX A] Race condition guard: by the time async DB calls complete,
+        // the user may have already reconnected (e.g. FCM wake-up) and set
+        // a NEW socket mapping in onlineUsers. Only wipe onlineUsers / set
+        // offline if onlineUsers still points to THIS (disconnecting) socket.
+        // activeSessions is per-socket-id and always safe to delete immediately.
         activeSessions.delete(socket.id);
-        broadcastUserOffline(session.username);
-        await broadcastUsersList();
+
+        const isStillOurSocket = onlineUsers.get(session.username) === socket.id;
+        if (isStillOurSocket) {
+          onlineUsers.delete(session.username);
+          await User.setOnlineStatus(session.username, false);
+          broadcastUserOffline(session.username);
+          await broadcastUsersList();
+        } else {
+          console.log(`[${socket.id}] ⚡ ${session.username} уже переподключился — пропускаем cleanup onlineUsers/offline`);
+        }
 
         console.log(`[${socket.id}] 👋 ${session.username} отключился`);
       }
