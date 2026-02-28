@@ -11,11 +11,21 @@ import {
   AppState,
   DeviceEventEmitter,
   NativeModules,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import messaging from '@react-native-firebase/messaging';
 import SocketService from '../services/SocketService';
 import ConnectionService from '../services/ConnectionService';
+
+// Firebase messaging is only available on Android/iOS, not Windows
+let messaging = null;
+try {
+  if (Platform.OS !== 'windows') {
+    messaging = require('@react-native-firebase/messaging').default;
+  }
+} catch (e) {
+  console.warn('[HomeScreen] Firebase messaging not available:', e.message);
+}
 
 /**
  * ═══════════════════════════════════════════════════════════
@@ -69,16 +79,20 @@ export default function HomeScreen({route, navigation}) {
    * Регистрация FCM токена для push-уведомлений
    */
   const registerFCMToken = async () => {
+    if (!messaging) {
+      console.log('[HomeScreen] FCM не доступен на этой платформе');
+      return;
+    }
     try {
       const fcmToken = await messaging().getToken();
-      console.log('[HomeScreen] 🔔 FCM Token:', fcmToken);
-      
+      console.log('[HomeScreen] FCM Token:', fcmToken);
+
       if (fcmToken) {
-        SocketService.registerFCMToken(username, fcmToken, 'android');
-        console.log('[HomeScreen] ✅ FCM токен зарегистрирован');
+        SocketService.registerFCMToken(username, fcmToken, Platform.OS);
+        console.log('[HomeScreen] FCM токен зарегистрирован');
       }
     } catch (error) {
-      console.error('[HomeScreen] ❌ Ошибка регистрации FCM:', error);
+      console.error('[HomeScreen] Ошибка регистрации FCM:', error);
     }
   };
 

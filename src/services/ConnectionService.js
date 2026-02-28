@@ -14,7 +14,7 @@ class ConnectionServiceHelper {
    */
   async start() {
     if (Platform.OS !== 'android') {
-      console.log('[ConnectionService] iOS не требует foreground service');
+      console.log('[ConnectionService] Foreground service не нужен на', Platform.OS);
       return true;
     }
 
