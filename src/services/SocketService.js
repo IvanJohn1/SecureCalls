@@ -7,21 +7,19 @@ const {NativeStorage} = NativeModules;
 
 /**
  * ═══════════════════════════════════════════════════════════
- * SocketService v13.0 — Bulletproof Reconnect
+ * SocketService v14.0 — Rock-Solid Reconnect
  * ═══════════════════════════════════════════════════════════
  *
- * v13.0 fixes (on top of v12.0):
- * 1. Server heartbeat ACK: client sends 'ping' → server replies 'pong' → client tracks _lastPongTime
- * 2. Proactive health check on foreground resume: if last pong is stale, force disconnect + reconnect
- * 3. Safety net timer: if DISCONNECTED for >15s without auto-reconnect, force reconnect
- * 4. Disconnect handler now covers ALL reasons (not just 'io server disconnect')
- * 5. Added messages_read / message_delivered listeners for read receipts
- * 6. Network change detection via periodic connectivity probe
+ * v14.0 fixes (on top of v13.0):
+ * 1. Safety net timer reduced from 15s to 8s for faster recovery
+ * 2. Disconnect handler schedules reconnect for ALL reasons (not just server disconnect)
+ * 3. Keepalive stopped on background, restarted on foreground
+ * 4. Verification ping with 5s timeout on foreground resume
+ * 5. Auth error sets DISCONNECTED (not CONNECTED) to trigger safety net
+ * 6. Stale connection threshold reduced to 25s
  */
 
-console.log('╔════════════════════════════════════════╗');
-console.log('║  SocketService v13.0 BULLETPROOF       ║');
-console.log('╚════════════════════════════════════════╝');
+console.log('[SocketService] v14.0 loaded');
 
 // Connection states
 const STATE = {
@@ -79,15 +77,16 @@ class SocketService {
     }
   }
 
-  // [v13.0] Safety net — if stuck in DISCONNECTED for 15s, force reconnect
+  // [v14.0] Safety net — if stuck in DISCONNECTED for 8s, force reconnect
+  // Reduced from 15s to 8s: incoming calls have a 30s window, every second counts
   _startDisconnectedSafetyTimer() {
     this._clearDisconnectedSafetyTimer();
     this._disconnectedSafetyTimer = setTimeout(() => {
       if (this.connectionState === STATE.DISCONNECTED && this.shouldAutoReconnect && !this.isManualDisconnect) {
-        console.log('[SocketService] ⚠️ Safety net: still DISCONNECTED after 15s — forcing full reconnect');
+        console.log('[SocketService] Safety net: still DISCONNECTED after 8s — forcing full reconnect');
         this._forceFullReconnect();
       }
-    }, 15000);
+    }, 8000);
   }
 
   _clearDisconnectedSafetyTimer() {
@@ -131,32 +130,45 @@ class SocketService {
   handleAppStateChange = async (nextAppState) => {
     console.log('[SocketService] AppState:', nextAppState);
 
-    if (nextAppState === 'active' && this.shouldAutoReconnect) {
-      // Reset backoff when app comes to foreground
-      this.reconnectBackoff = 1000;
+    if (nextAppState !== 'active') {
+      // [v14.0] Stop keepalive when going to background.
+      // Android freezes JS timers in doze mode, causing inconsistent state.
+      this.stopKeepalive();
+      return;
+    }
 
-      // [v13.0] Proactive health check — don't trust socket.connected after
-      // long background. Send a ping and verify pong arrives.
-      if (this.socket?.connected) {
-        const timeSinceLastPong = Date.now() - this._lastPongTime;
-        console.log(`[SocketService] Health check: lastPong ${timeSinceLastPong}ms ago`);
+    // App is now active (foreground)
+    if (!this.shouldAutoReconnect) return;
 
-        if (timeSinceLastPong > 35000) {
-          // Last successful heartbeat was >35s ago — connection is likely stale.
-          // Android froze timers, the underlying TCP is dead.
-          console.log('[SocketService] ⚠️ Stale connection detected (pong >35s ago) — forcing full reconnect');
-          this._forceFullReconnect();
-          return;
-        }
+    // Reset backoff when app comes to foreground
+    this.reconnectBackoff = 1000;
 
-        // Connection looks fresh — send a verification ping
-        this.socket.emit('ping', {timestamp: Date.now()});
-        // Start keepalive again (timers might have been deferred in background)
-        this.startKeepalive();
-      } else {
-        console.log('[SocketService] App active, not connected — reconnecting...');
+    if (this.socket?.connected) {
+      const timeSinceLastPong = Date.now() - this._lastPongTime;
+      console.log(`[SocketService] Health check: lastPong ${timeSinceLastPong}ms ago`);
+
+      // [v14.0] Reduced stale threshold from 35s to 25s
+      if (timeSinceLastPong > 25000) {
+        console.log('[SocketService] Stale connection (pong >25s ago) — forcing full reconnect');
         this._forceFullReconnect();
+        return;
       }
+
+      // [v14.0] Verification ping with 5s timeout
+      // If pong doesn't arrive in 5s, connection is dead
+      this.socket.emit('ping', {timestamp: Date.now()});
+      this.startKeepalive();
+
+      const pongBefore = this._lastPongTime;
+      setTimeout(() => {
+        if (this._lastPongTime === pongBefore && this.socket?.connected) {
+          console.log('[SocketService] Verification ping timed out (5s) — forcing reconnect');
+          this._forceFullReconnect();
+        }
+      }, 5000);
+    } else {
+      console.log('[SocketService] App active, not connected — reconnecting...');
+      this._forceFullReconnect();
     }
   };
 
@@ -287,16 +299,20 @@ class SocketService {
       this._setState(STATE.DISCONNECTED);
       this.notifyListeners('disconnect', reason);
 
-      // [v13.0] Handle ALL disconnect reasons, not just 'io server disconnect'.
-      // socket.io auto-reconnects for transport issues, but NOT for 'io server disconnect'.
-      // For all cases: if auto-reconnect is desired and this isn't manual, schedule it.
+      // [v14.0] Schedule reconnect for ALL non-manual disconnect reasons.
+      // socket.io auto-reconnects for transport issues, but it can fail silently.
+      // We schedule our own reconnect as a backup for every disconnect type.
       if (!this.isManualDisconnect && this.shouldAutoReconnect) {
         if (reason === 'io server disconnect') {
-          console.log('[SocketService] Server initiated disconnect, scheduling reconnect...');
-          this._scheduleReconnect();
+          // Server kicked us — socket.io won't auto-reconnect, do it immediately
+          console.log('[SocketService] Server disconnect — reconnecting immediately');
+          this._scheduleReconnect(500);
+        } else {
+          // 'transport close', 'ping timeout', etc.
+          // socket.io may auto-reconnect, but schedule backup after 3s
+          console.log('[SocketService] Transport disconnect — backup reconnect in 3s');
+          this._scheduleReconnect(3000);
         }
-        // For 'transport close', 'ping timeout' — socket.io auto-reconnects.
-        // The safety net timer (15s) will catch it if auto-reconnect fails.
       }
     });
 
@@ -715,7 +731,8 @@ class SocketService {
       this.socket.once('auth_error', (data) => {
         cleanup();
         this.isAuthenticating = false;
-        this._setState(STATE.CONNECTED);
+        // [v14.0] Set DISCONNECTED, not CONNECTED — triggers safety net for recovery
+        this._setState(STATE.DISCONNECTED);
         console.error('[SocketService] Auth error:', data.message);
         reject(new Error(data.message));
       });

@@ -11,6 +11,7 @@ import {
   StatusBar,
   Alert,
   Linking,
+  Share,
   Image,
   ActivityIndicator,
   Dimensions,
@@ -390,16 +391,38 @@ export default function ChatScreen({route, navigation}) {
 
   /**
    * Open URL in browser
+   * FIX: Don't use canOpenURL() — it returns false on many Android devices
+   * due to package visibility restrictions (Android 11+). Just try openURL directly.
    */
   const openLink = useCallback((url) => {
-    Linking.canOpenURL(url).then(supported => {
-      if (supported) {
-        Linking.openURL(url);
-      } else {
-        Alert.alert('Ошибка', `Не удалось открыть: ${url}`);
-      }
+    Linking.openURL(url).catch(err => {
+      console.error('[ChatScreen] openURL error:', err);
+      Alert.alert('Ошибка', `Не удалось открыть ссылку.\n\nВы можете скопировать её через долгое нажатие.`);
     });
   }, []);
+
+  /**
+   * Long-press on link: show options (Open / Copy / Cancel)
+   */
+  const handleLinkLongPress = useCallback((url) => {
+    Alert.alert(
+      'Ссылка',
+      url,
+      [
+        {
+          text: 'Открыть',
+          onPress: () => openLink(url),
+        },
+        {
+          text: 'Копировать',
+          onPress: () => {
+            Share.share({message: url}).catch(() => {});
+          },
+        },
+        {text: 'Отмена', style: 'cancel'},
+      ],
+    );
+  }, [openLink]);
 
   /**
    * Render message text with clickable links
@@ -417,7 +440,8 @@ export default function ChatScreen({route, navigation}) {
               isMine ? styles.myMessageText : styles.theirMessageText,
               styles.linkText,
             ]}
-            onPress={() => openLink(part.value)}>
+            onPress={() => openLink(part.value)}
+            onLongPress={() => handleLinkLongPress(part.value)}>
             {part.value}
           </Text>
         );
@@ -425,6 +449,7 @@ export default function ChatScreen({route, navigation}) {
       return (
         <Text
           key={index}
+          selectable={true}
           style={[
             styles.messageText,
             isMine ? styles.myMessageText : styles.theirMessageText,
