@@ -12,28 +12,24 @@ import {RTCView} from 'react-native-webrtc';
 import SocketService from '../services/SocketService';
 import WebRTCService from '../services/WebRTCService';
 import NotificationService from '../services/NotificationService';
+import AudioService from '../services/AudioService';
 
 const {width, height} = Dimensions.get('window');
 
 /**
- * ═══════════════════════════════════════════════════════════
- * CallScreen v8.0 FIX - ИСПРАВЛЕНИЕ OFFER/ANSWER + ICE
- * ═══════════════════════════════════════════════════════════
+ * CallScreen v9.0 — Full VoIP Audio
  *
- * КРИТИЧНЫЕ ИСПРАВЛЕНИЯ:
- * 1. Caller ждёт call_accepted ПЕРЕД отправкой offer
- *    → ICE candidates не теряются
- * 2. Receiver обрабатывает offer из params ИЛИ через сокет
- * 3. Правильные переходы состояний для обоих сторон
- * 4. Защита от повторных offer/answer
+ * NEW in v9.0:
+ * 1. Ringback tone for caller (hears "ringing" while waiting)
+ * 2. Speaker toggle
+ * 3. Volume control (up/down buttons)
+ * 4. MODE_IN_COMMUNICATION for proper VoIP audio routing
+ * 5. Max call volume on connect for loud, clear audio
  */
 
-console.log('╔════════════════════════════════════════╗');
-console.log('║  CallScreen v8.0 FIX                  ║');
-console.log('╚════════════════════════════════════════╝');
+console.log('CallScreen v9.0: Full VoIP Audio');
 
 export default function CallScreen({route, navigation}) {
-  // [FIX v11.0] callId берётся из params; для caller-стороны также приходит через call_initiated
   const {username, peer, isVideo, isCaller, offer, callId: initialCallId} = route.params;
 
   const [localStream, setLocalStream] = useState(null);
@@ -42,6 +38,8 @@ export default function CallScreen({route, navigation}) {
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(isVideo);
   const [callDuration, setCallDuration] = useState(0);
+  const [isSpeaker, setIsSpeaker] = useState(false);
+  const [volumePercent, setVolumePercent] = useState(100);
 
   const callTimerRef = useRef(null);
   const callTimeoutRef = useRef(null);
@@ -49,44 +47,59 @@ export default function CallScreen({route, navigation}) {
   const offerSentRef = useRef(false);
   const isMountedRef = useRef(true);
   const isCleanedUpRef = useRef(false);
-  // [NEW v11.0] callId ref: заполняется из params (receiver) или через call_initiated (caller)
   const callIdRef = useRef(initialCallId || null);
-  // [FIX] callStateRef to avoid stale closures in WebRTC/ICE callbacks
   const callStateRef = useRef('initializing');
 
-  // Helper: update callState + ref atomically, never downgrade from 'connected'
   const updateCallState = (newState) => {
     if (callStateRef.current === 'connected' && newState === 'connecting') {
-      return; // never downgrade from connected to connecting
+      return;
     }
+    const prevState = callStateRef.current;
     callStateRef.current = newState;
     setCallState(newState);
+
+    // Audio state transitions
+    if (newState === 'calling' && isCaller) {
+      // Caller: play ringback so they hear "ringing"
+      AudioService.startRingback();
+    }
+
+    if (newState === 'connecting' && prevState === 'calling') {
+      // Call accepted — stop ringback
+      AudioService.stopRingback();
+    }
+
+    if (newState === 'connected' && prevState !== 'connected') {
+      // Call connected — setup VoIP audio
+      AudioService.stopRingback();
+      AudioService.setCallMode();
+      AudioService.setMaxVolume();
+      // Read current volume
+      AudioService.getVolume().then(v => {
+        if (isMountedRef.current) setVolumePercent(v);
+      });
+    }
+
+    if (newState === 'timeout') {
+      AudioService.stopRingback();
+    }
   };
 
   useEffect(() => {
-    console.log('═══════════════════════════════════════');
-    console.log('CallScreen v8.0: МОНТИРОВАНИЕ');
-    console.log('Пользователь:', username);
-    console.log('Собеседник:', peer);
-    console.log('Видео:', isVideo);
-    console.log('Звонящий:', isCaller);
-    console.log('Offer в params:', !!offer);
-    console.log('═══════════════════════════════════════');
+    console.log('CallScreen v9.0: MOUNT');
+    console.log('User:', username, 'Peer:', peer, 'Video:', isVideo, 'Caller:', isCaller);
 
     isMountedRef.current = true;
     isCleanedUpRef.current = false;
 
-    // Отменить уведомления
     NotificationService.cancelAllNotifications();
 
-    // Инициализация
     initialize();
 
-    // Таймаут на весь звонок (60 сек) — только если звоним
     if (isCaller) {
       callTimeoutRef.current = setTimeout(() => {
         if (!isMountedRef.current) return;
-        console.log('⏰ Таймаут звонка (60 сек)');
+        console.log('Call timeout (60s)');
         Alert.alert('Нет ответа', 'Собеседник не отвечает', [
           {text: 'OK', onPress: handleEndCall},
         ]);
@@ -94,73 +107,48 @@ export default function CallScreen({route, navigation}) {
     }
 
     return () => {
-      console.log('CallScreen v8.0: РАЗМОНТИРОВАНИЕ');
+      console.log('CallScreen v9.0: UNMOUNT');
       isMountedRef.current = false;
       cleanup();
     };
   }, []);
 
-  /**
-   * Инициализация звонка
-   */
   const initialize = async () => {
     try {
-      console.log('CallScreen v8.0: ИНИЦИАЛИЗАЦИЯ');
+      console.log('CallScreen: INIT');
 
-      // 1. Загрузить ICE/TURN конфигурацию с сервера (Signal-style)
-      console.log('→ Шаг 1: Загрузка ICE конфигурации...');
       await WebRTCService.fetchIceServers();
       if (!isMountedRef.current) return;
-      console.log('✓ Шаг 1: ICE конфигурация загружена');
 
-      // 2. Получить локальный поток
-      console.log('→ Шаг 2: Получение медиа...');
       const stream = await WebRTCService.getLocalStream(isVideo);
       if (!isMountedRef.current) return;
       setLocalStream(stream);
-      console.log('✓ Шаг 2: Медиа получено');
 
-      // 3. Создать PeerConnection
-      console.log('→ Шаг 3: Создание PeerConnection...');
       WebRTCService.createPeerConnection();
-      console.log('✓ Шаг 3: PeerConnection создан');
 
-      // 4. Настроить слушателей
-      console.log('→ Шаг 4: Настройка слушателей...');
       setupListeners();
-      console.log('✓ Шаг 4: Слушатели настроены');
 
-      // 5. Обработка в зависимости от роли
       if (isCaller) {
-        // ═══════════════════════════════════════
-        // ЗВОНЯЩИЙ: ЖДЁМ call_accepted, потом offer
-        // ═══════════════════════════════════════
-        console.log('→ Шаг 5: Ожидание принятия звонка...');
         if (!isMountedRef.current) return;
         updateCallState('calling');
-        // callId придёт через call_initiated (слушатель настроен выше)
-        // Offer будет создан когда придёт call_accepted (см. handleCallAccepted)
       } else {
-        // ═══════════════════════════════════════
-        // ПРИНИМАЮЩИЙ: обработать offer
-        // ═══════════════════════════════════════
         if (!isMountedRef.current) return;
         updateCallState('connecting');
 
+        // Set VoIP audio mode for receiver too
+        AudioService.setCallMode();
+        AudioService.setMaxVolume();
+
         if (offer) {
-          console.log('→ Шаг 5: Обработка offer из params...');
-          // Небольшая задержка чтобы PeerConnection стабилизировался
           await new Promise(resolve => setTimeout(resolve, 300));
           if (!isMountedRef.current) return;
           await handleOfferAndSendAnswer(offer);
-        } else {
-          console.log('→ Шаг 5: Ожидание offer через сокет...');
         }
       }
 
-      console.log('CallScreen v11.0: ИНИЦИАЛИЗАЦИЯ ЗАВЕРШЕНА');
+      console.log('CallScreen: INIT DONE');
     } catch (error) {
-      console.error('CallScreen v11.0: ОШИБКА ИНИЦИАЛИЗАЦИИ:', error.message);
+      console.error('CallScreen: INIT ERROR:', error.message);
       if (!isMountedRef.current) return;
       Alert.alert('Ошибка инициализации', error.message, [
         {text: 'OK', onPress: () => navigation.goBack()},
@@ -169,36 +157,26 @@ export default function CallScreen({route, navigation}) {
   };
 
   // ═══════════════════════════════════════
-  // [NEW v11.0] callId handlers
+  // callId handlers
   // ═══════════════════════════════════════
 
-  /**
-   * Получаем callId от сервера (для caller-стороны при online звонке)
-   */
   const handleCallInitiated = data => {
     if (data.to === peer) {
       callIdRef.current = data.callId;
-      console.log('CallScreen v11.0: callId получен (call_initiated):', data.callId);
+      console.log('CallScreen: callId (call_initiated):', data.callId);
     }
   };
 
-  /**
-   * Получаем callId когда адресат offline (через push)
-   */
   const handleCallRingingOffline = data => {
     if (data.to === peer || data.callId) {
       callIdRef.current = data.callId;
-      console.log('CallScreen v11.0: callId получен (call_ringing_offline):', data.callId);
+      console.log('CallScreen: callId (call_ringing_offline):', data.callId);
     }
   };
 
-  /**
-   * Сервер отменил звонок по таймауту (30 сек без ответа)
-   */
   const handleCallTimeout = data => {
     if (!isMountedRef.current) return;
     console.log('CallScreen: Timeout from server');
-    // Cancel client timeout to avoid double Alert
     if (callTimeoutRef.current) {
       clearTimeout(callTimeoutRef.current);
       callTimeoutRef.current = null;
@@ -211,26 +189,17 @@ export default function CallScreen({route, navigation}) {
     }
   };
 
-  /**
-   * КРИТИЧНО: Когда собеседник принял звонок — создаём offer
-   */
   const handleCallAccepted = async data => {
     if (!isMountedRef.current) return;
-    if (offerSentRef.current) {
-      console.log('⚠️ Offer уже отправлен, игнорируем повторный call_accepted');
-      return;
-    }
+    if (offerSentRef.current) return;
 
-    console.log('═══════════════════════════════════════');
-    console.log('CallScreen v8.0: ЗВОНОК ПРИНЯТ — СОЗДАЁМ OFFER');
-    console.log('═══════════════════════════════════════');
+    console.log('CallScreen: CALL ACCEPTED — creating offer');
 
     try {
       offerSentRef.current = true;
       if (!isMountedRef.current) return;
       updateCallState('connecting');
 
-      // Задержка для стабилизации (receiver должен успеть подготовить PeerConnection)
       await new Promise(resolve => setTimeout(resolve, 800));
       if (!isMountedRef.current) return;
 
@@ -238,24 +207,18 @@ export default function CallScreen({route, navigation}) {
       if (!isMountedRef.current) return;
 
       SocketService.sendWebRTCOffer(peer, createdOffer);
-      console.log('✓ Offer отправлен собеседнику ПОСЛЕ принятия звонка');
+      console.log('Offer sent after call accepted');
     } catch (error) {
-      console.error('✗ Ошибка создания offer:', error);
+      console.error('Error creating offer:', error);
       offerSentRef.current = false;
     }
   };
 
-  /**
-   * КРИТИЧНО: Обработка offer и отправка answer
-   */
   const handleOfferAndSendAnswer = async offerData => {
-    if (answerSentRef.current) {
-      console.log('⚠️ Answer уже был отправлен, пропускаем');
-      return;
-    }
+    if (answerSentRef.current) return;
 
     try {
-      console.log('CallScreen v8.0: ОБРАБОТКА OFFER → СОЗДАНИЕ ANSWER');
+      console.log('CallScreen: Processing offer -> creating answer');
 
       const answer = await WebRTCService.createAnswer(offerData);
       if (!isMountedRef.current) return;
@@ -263,34 +226,28 @@ export default function CallScreen({route, navigation}) {
       const sent = SocketService.sendWebRTCAnswer(peer, answer);
       if (sent) {
         answerSentRef.current = true;
-        console.log('✓ Answer успешно отправлен');
+        console.log('Answer sent');
       } else {
-        console.error('✗ Не удалось отправить answer (сокет отключён?)');
+        console.error('Failed to send answer');
       }
     } catch (error) {
-      console.error('✗ Ошибка обработки offer:', error);
+      console.error('Error processing offer:', error);
     }
   };
 
-  /**
-   * Настройка слушателей
-   */
   const setupListeners = () => {
-    // WebRTC события
     WebRTCService.on('remoteStream', handleRemoteStream);
     WebRTCService.on('iceCandidate', handleLocalIceCandidate);
     WebRTCService.on('iceConnectionStateChange', handleIceStateChange);
     WebRTCService.on('connectionStateChange', handleConnectionStateChange);
 
-    // Socket события
-    SocketService.on('call_accepted', handleCallAccepted);     // ← КЛЮЧЕВОЕ!
+    SocketService.on('call_accepted', handleCallAccepted);
     SocketService.on('webrtc_offer', handleOffer);
     SocketService.on('webrtc_answer', handleAnswer);
     SocketService.on('ice_candidate', handleRemoteIceCandidate);
     SocketService.on('call_rejected', handleCallRejected);
     SocketService.on('call_ended', handleCallEnded);
     SocketService.on('call_cancelled', handleCallCancelled);
-    // [NEW v11.0] callId events
     SocketService.on('call_initiated', handleCallInitiated);
     SocketService.on('call_ringing_offline', handleCallRingingOffline);
     SocketService.on('call_timeout', handleCallTimeout);
@@ -315,26 +272,20 @@ export default function CallScreen({route, navigation}) {
   };
 
   // ═══════════════════════════════════════
-  // WebRTC обработчики
+  // WebRTC handlers
   // ═══════════════════════════════════════
 
   const handleRemoteStream = stream => {
     if (!isMountedRef.current) return;
-
-    console.log('═══════════════════════════════════════');
-    console.log('CallScreen v8.0: УДАЛЁННЫЙ ПОТОК ПОЛУЧЕН!');
-    console.log('═══════════════════════════════════════');
+    console.log('CallScreen: REMOTE STREAM received');
 
     setRemoteStream(stream);
     updateCallState('connected');
 
-    // Очистить таймаут
     if (callTimeoutRef.current) {
       clearTimeout(callTimeoutRef.current);
       callTimeoutRef.current = null;
     }
-
-    // Запустить таймер длительности
     startCallTimer();
   };
 
@@ -344,14 +295,11 @@ export default function CallScreen({route, navigation}) {
 
   const handleIceStateChange = state => {
     if (!isMountedRef.current) return;
-    console.log('→ ICE состояние:', state);
+    console.log('ICE state:', state);
 
     if (state === 'connected' || state === 'completed') {
-      // [FIX] ICE connected — set 'connected' state (use ref to avoid stale closure)
       if (callStateRef.current !== 'connected') {
-        console.log('✓ ICE connected — обновляем статус');
         updateCallState('connected');
-        // Clear timeout
         if (callTimeoutRef.current) {
           clearTimeout(callTimeoutRef.current);
           callTimeoutRef.current = null;
@@ -363,19 +311,16 @@ export default function CallScreen({route, navigation}) {
 
   const handleConnectionStateChange = state => {
     if (!isMountedRef.current) return;
-    console.log('→ Connection состояние:', state);
+    console.log('Connection state:', state);
 
     if (state === 'connecting') {
-      // [FIX] Use ref to check real state — never downgrade from 'connected'
       if (callStateRef.current !== 'connected') {
         updateCallState('connecting');
       }
     }
 
     if (state === 'connected' && callStateRef.current !== 'connected') {
-      console.log('P2P connected');
       updateCallState('connected');
-      // Clear timeout
       if (callTimeoutRef.current) {
         clearTimeout(callTimeoutRef.current);
         callTimeoutRef.current = null;
@@ -392,50 +337,42 @@ export default function CallScreen({route, navigation}) {
   };
 
   // ═══════════════════════════════════════
-  // Socket обработчики
+  // Socket handlers
   // ═══════════════════════════════════════
 
   const handleOffer = async data => {
     if (data.from !== peer) return;
     if (!isMountedRef.current) return;
-
-    console.log('CallScreen v8.0: ПОЛУЧЕН OFFER ЧЕРЕЗ СОКЕТ от:', data.from);
+    console.log('CallScreen: OFFER received via socket from:', data.from);
     await handleOfferAndSendAnswer(data.offer);
   };
 
   const handleAnswer = async data => {
     if (data.from !== peer) return;
     if (!isMountedRef.current) return;
-
-    console.log('═══════════════════════════════════════');
-    console.log('CallScreen v8.0: ПОЛУЧЕН ANSWER от:', data.from);
-    console.log('═══════════════════════════════════════');
+    console.log('CallScreen: ANSWER received from:', data.from);
 
     try {
       await WebRTCService.setRemoteAnswer(data.answer);
-      console.log('✓ Answer обработан, ожидаем подключение...');
-      // [FIX] Don't downgrade from 'connected' — use updateCallState which guards this
       if (isMountedRef.current) {
         updateCallState('connecting');
       }
     } catch (error) {
-      console.error('✗ Ошибка обработки answer:', error);
+      console.error('Error processing answer:', error);
     }
   };
 
   const handleRemoteIceCandidate = async data => {
     if (data.from !== peer) return;
-
     try {
       await WebRTCService.addIceCandidate(data.candidate);
     } catch (error) {
-      console.warn('⚠️ Ошибка добавления ICE:', error.message);
+      console.warn('ICE candidate error:', error.message);
     }
   };
 
   const handleCallRejected = data => {
     if (!isMountedRef.current) return;
-    console.log('✗ Звонок отклонён');
     Alert.alert('Звонок отклонён', 'Собеседник отклонил звонок', [
       {text: 'OK', onPress: () => navigation.goBack()},
     ]);
@@ -443,24 +380,22 @@ export default function CallScreen({route, navigation}) {
 
   const handleCallEnded = data => {
     if (!isMountedRef.current) return;
-    console.log('✗ Звонок завершён собеседником');
     cleanup();
     navigation.goBack();
   };
 
   const handleCallCancelled = data => {
     if (!isMountedRef.current) return;
-    console.log('✗ Звонок отменён');
     cleanup();
     navigation.goBack();
   };
 
   // ═══════════════════════════════════════
-  // Управление звонком
+  // Call management
   // ═══════════════════════════════════════
 
   const startCallTimer = () => {
-    if (callTimerRef.current) return; // Не запускать повторно
+    if (callTimerRef.current) return;
     callTimerRef.current = setInterval(() => {
       setCallDuration(prev => prev + 1);
     }, 1000);
@@ -469,11 +404,10 @@ export default function CallScreen({route, navigation}) {
   const handleEndCall = () => {
     if (isCleanedUpRef.current) return;
 
-    console.log('CallScreen v11.0: ЗАВЕРШЕНИЕ ЗВОНКА, callId:', callIdRef.current);
+    console.log('CallScreen: END CALL, callId:', callIdRef.current);
 
     NotificationService.cancelAllNotifications();
 
-    // [FIX v11.0] Передаём peer и callId — сервер отправит call_ended ТОЛЬКО собеседнику
     if (isCaller && callState === 'calling') {
       SocketService.cancelCall(peer, callIdRef.current);
     } else {
@@ -498,6 +432,11 @@ export default function CallScreen({route, navigation}) {
       callTimeoutRef.current = null;
     }
 
+    // Stop all audio
+    AudioService.stopRingback();
+    AudioService.setNormalMode();
+    AudioService.setSpeaker(false);
+
     cleanupListeners();
     WebRTCService.cleanup();
 
@@ -508,7 +447,7 @@ export default function CallScreen({route, navigation}) {
   };
 
   // ═══════════════════════════════════════
-  // Управление медиа
+  // Media controls
   // ═══════════════════════════════════════
 
   const toggleMute = () => {
@@ -529,8 +468,26 @@ export default function CallScreen({route, navigation}) {
     WebRTCService.switchCamera();
   };
 
+  const toggleSpeaker = () => {
+    const newState = !isSpeaker;
+    AudioService.setSpeaker(newState);
+    setIsSpeaker(newState);
+  };
+
+  const volumeUp = () => {
+    const newVol = Math.min(100, volumePercent + 15);
+    AudioService.setVolume(newVol);
+    setVolumePercent(newVol);
+  };
+
+  const volumeDown = () => {
+    const newVol = Math.max(0, volumePercent - 15);
+    AudioService.setVolume(newVol);
+    setVolumePercent(newVol);
+  };
+
   // ═══════════════════════════════════════
-  // Утилиты
+  // Helpers
   // ═══════════════════════════════════════
 
   const formatDuration = seconds => {
@@ -558,12 +515,13 @@ export default function CallScreen({route, navigation}) {
     }
   };
 
+  const isConnected = callState === 'connected';
+
   return (
     <View style={styles.container}>
-      {/* StatusBar wrapped - safe even when activity is null */}
       <StatusBar barStyle="light-content" backgroundColor="#000" />
 
-      {/* Удалённое видео */}
+      {/* Remote video */}
       {remoteStream && isVideo ? (
         <RTCView
           streamURL={remoteStream.toURL()}
@@ -581,7 +539,7 @@ export default function CallScreen({route, navigation}) {
         </View>
       )}
 
-      {/* Локальное видео (PiP) */}
+      {/* Local video (PiP) */}
       {localStream && isVideo && isVideoEnabled && (
         <View style={styles.localVideoContainer}>
           <RTCView
@@ -593,52 +551,98 @@ export default function CallScreen({route, navigation}) {
         </View>
       )}
 
-      {/* Оверлей */}
+      {/* Overlay */}
       <View style={styles.overlay}>
-        {/* Хедер */}
+        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.peerName}>{peer}</Text>
           <Text style={styles.callStateText}>{getStateText()}</Text>
         </View>
 
-        {/* Контролы */}
-        <View style={styles.controls}>
-          <TouchableOpacity
-            style={[styles.controlButton, isMuted && styles.controlButtonActive]}
-            onPress={toggleMute}>
-            <Text style={styles.controlIcon}>{isMuted ? '🔇' : '🎤'}</Text>
-            <Text style={styles.controlLabel}>Микрофон</Text>
-          </TouchableOpacity>
+        {/* Volume indicator (shown during connected call) */}
+        {isConnected && (
+          <View style={styles.volumeIndicator}>
+            <Text style={styles.volumeText}>
+              {isSpeaker ? 'Динамик' : 'Наушник'} {volumePercent}%
+            </Text>
+          </View>
+        )}
 
-          {isVideo && (
+        {/* Controls */}
+        <View style={styles.controlsContainer}>
+          {/* Volume row (shown during call) */}
+          {isConnected && (
+            <View style={styles.volumeRow}>
+              <TouchableOpacity
+                style={styles.volumeButton}
+                onPress={volumeDown}>
+                <Text style={styles.volumeButtonIcon}>-</Text>
+              </TouchableOpacity>
+              <View style={styles.volumeBarOuter}>
+                <View
+                  style={[
+                    styles.volumeBarInner,
+                    {width: `${volumePercent}%`},
+                  ]}
+                />
+              </View>
+              <TouchableOpacity
+                style={styles.volumeButton}
+                onPress={volumeUp}>
+                <Text style={styles.volumeButtonIcon}>+</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Main controls row */}
+          <View style={styles.controls}>
             <TouchableOpacity
-              style={[
-                styles.controlButton,
-                !isVideoEnabled && styles.controlButtonActive,
-              ]}
-              onPress={toggleVideo}>
-              <Text style={styles.controlIcon}>
-                {isVideoEnabled ? '📹' : '📵'}
+              style={[styles.controlButton, isMuted && styles.controlButtonActive]}
+              onPress={toggleMute}>
+              <Text style={styles.controlIcon}>{isMuted ? '🔇' : '🎤'}</Text>
+              <Text style={styles.controlLabel}>Микрофон</Text>
+            </TouchableOpacity>
+
+            {/* Speaker toggle */}
+            <TouchableOpacity
+              style={[styles.controlButton, isSpeaker && styles.controlButtonSpeaker]}
+              onPress={toggleSpeaker}>
+              <Text style={styles.controlIcon}>{isSpeaker ? '🔊' : '🔈'}</Text>
+              <Text style={styles.controlLabel}>
+                {isSpeaker ? 'Динамик' : 'Наушник'}
               </Text>
-              <Text style={styles.controlLabel}>Видео</Text>
             </TouchableOpacity>
-          )}
 
-          {isVideo && isVideoEnabled && (
+            {isVideo && (
+              <TouchableOpacity
+                style={[
+                  styles.controlButton,
+                  !isVideoEnabled && styles.controlButtonActive,
+                ]}
+                onPress={toggleVideo}>
+                <Text style={styles.controlIcon}>
+                  {isVideoEnabled ? '📹' : '📵'}
+                </Text>
+                <Text style={styles.controlLabel}>Видео</Text>
+              </TouchableOpacity>
+            )}
+
+            {isVideo && isVideoEnabled && (
+              <TouchableOpacity
+                style={styles.controlButton}
+                onPress={switchCamera}>
+                <Text style={styles.controlIcon}>🔄</Text>
+                <Text style={styles.controlLabel}>Камера</Text>
+              </TouchableOpacity>
+            )}
+
             <TouchableOpacity
-              style={styles.controlButton}
-              onPress={switchCamera}>
-              <Text style={styles.controlIcon}>🔄</Text>
-              <Text style={styles.controlLabel}>Камера</Text>
+              style={[styles.controlButton, styles.endCallButton]}
+              onPress={handleEndCall}>
+              <Text style={styles.controlIcon}>📵</Text>
+              <Text style={styles.controlLabel}>Завершить</Text>
             </TouchableOpacity>
-          )}
-
-          <TouchableOpacity
-            style={[styles.controlButton, styles.endCallButton]}
-            onPress={handleEndCall}>
-            <Text style={styles.controlIcon}>📵</Text>
-            <Text style={styles.controlLabel}>Завершить</Text>
-          </TouchableOpacity>
+          </View>
         </View>
       </View>
     </View>
@@ -718,12 +722,60 @@ const styles = StyleSheet.create({
     textShadowOffset: {width: 0, height: 1},
     textShadowRadius: 3,
   },
+  volumeIndicator: {
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  volumeText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.7)',
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  controlsContainer: {
+    paddingBottom: 40,
+    paddingHorizontal: 20,
+  },
+  volumeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    paddingHorizontal: 10,
+  },
+  volumeButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  volumeButtonIcon: {
+    fontSize: 22,
+    color: '#fff',
+    fontWeight: 'bold',
+  },
+  volumeBarOuter: {
+    flex: 1,
+    height: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 3,
+    marginHorizontal: 12,
+    overflow: 'hidden',
+  },
+  volumeBarInner: {
+    height: '100%',
+    backgroundColor: '#4CAF50',
+    borderRadius: 3,
+  },
   controls: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingBottom: 50,
-    paddingHorizontal: 20,
     flexWrap: 'wrap',
   },
   controlButton: {
@@ -733,11 +785,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginHorizontal: 10,
+    marginHorizontal: 8,
     marginVertical: 5,
   },
   controlButtonActive: {
     backgroundColor: 'rgba(255, 59, 48, 0.8)',
+  },
+  controlButtonSpeaker: {
+    backgroundColor: 'rgba(76, 175, 80, 0.7)',
   },
   endCallButton: {
     backgroundColor: 'rgba(255, 59, 48, 0.9)',
@@ -746,9 +801,9 @@ const styles = StyleSheet.create({
     fontSize: 28,
   },
   controlLabel: {
-    fontSize: 11,
+    fontSize: 10,
     color: '#fff',
-    marginTop: 4,
+    marginTop: 3,
     fontWeight: '500',
   },
 });

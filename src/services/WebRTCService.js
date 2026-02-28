@@ -95,12 +95,18 @@ class WebRTCService {
     try {
       // [FIX v10.0] Используем современный формат constraints (без legacy mandatory)
       // mandatory устарел в Android WebRTC и вызывает предупреждения/ошибки на Android 15
+      // Audio constraints optimized for VoIP (louder mic, clear voice)
+      // autoGainControl boosts quiet microphones
+      // channelCount: 1 forces mono (better for voice)
+      // Higher sampleRate = better quality
       const constraints = {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          channelCount: 1,
           sampleRate: 48000,
+          sampleSize: 16,
         },
         video: isVideo
           ? {

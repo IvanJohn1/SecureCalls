@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import SocketService from '../services/SocketService';
 import NotificationService from '../services/NotificationService';
+import AudioService from '../services/AudioService';
 
 const {width} = Dimensions.get('window');
 
@@ -72,6 +73,9 @@ export default function IncomingCallScreen({route, navigation}) {
     );
     pulseLoop.start();
 
+    // Играть рингтон при входящем звонке
+    AudioService.startRingtone();
+
     // КРИТИЧНО: Слушать offer ДО принятия звонка
     SocketService.on('webrtc_offer', handleOffer);
     SocketService.on('call_cancelled', handleCallCancelled);
@@ -88,6 +92,7 @@ export default function IncomingCallScreen({route, navigation}) {
  
     return () => {
       isMountedRef.current = false;
+      AudioService.stopRingtone();
       SocketService.off('webrtc_offer', handleOffer);
       SocketService.off('call_cancelled', handleCallCancelled);
       SocketService.off('call_timeout', handleCallTimeout);
@@ -111,16 +116,18 @@ export default function IncomingCallScreen({route, navigation}) {
     if (!isMountedRef.current) return;
     if (data.from === from) {
       console.log('Call cancelled by caller');
+      AudioService.stopRingtone();
       NotificationService.cancelAllNotifications();
       navigation.goBack();
     }
   };
- 
+
   const handleCallTimeout = data => {
     if (!isMountedRef.current) return;
     // Server sends call_timeout to recipient with {from: callerName}
     if (data.from === from) {
       console.log('Call timed out from server');
+      AudioService.stopRingtone();
       NotificationService.cancelAllNotifications();
       navigation.goBack();
     }
@@ -138,7 +145,8 @@ export default function IncomingCallScreen({route, navigation}) {
     setIsProcessing(true);
 
     try {
-      // Отменить уведомления
+      // Остановить рингтон и уведомления
+      AudioService.stopRingtone();
       await NotificationService.cancelAllNotifications();
 
       // Wait for socket to be ready if not already connected
@@ -194,6 +202,7 @@ export default function IncomingCallScreen({route, navigation}) {
     setIsProcessing(true);
 
     try {
+      AudioService.stopRingtone();
       await NotificationService.cancelAllNotifications();
       SocketService.rejectCall(from, callId);
       navigation.goBack();

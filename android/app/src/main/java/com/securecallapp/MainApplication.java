@@ -44,6 +44,9 @@ public class MainApplication extends Application implements ReactApplication {
                     // Регистрация NativeStoragePackage
                     packages.add(new NativeStoragePackage());
 
+                    // Регистрация AudioPackage (ringtone, speaker, volume)
+                    packages.add(new AudioPackage());
+
                     return packages;
                 }
 
