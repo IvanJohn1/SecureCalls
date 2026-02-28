@@ -38,6 +38,35 @@ try {
  * - Улучшенная обработка ошибок
  */
 
+/**
+ * Format last seen timestamp
+ */
+function formatLastSeen(timestamp) {
+  if (!timestamp) return 'Не в сети';
+
+  const date = new Date(timestamp);
+  const now = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const isSameDay = (d1, d2) =>
+    d1.getDate() === d2.getDate() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getFullYear() === d2.getFullYear();
+
+  const time = date.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});
+
+  if (isSameDay(date, now)) return `Был(а) сегодня в ${time}`;
+  if (isSameDay(date, yesterday)) return `Был(а) вчера в ${time}`;
+
+  const dateStr = date.toLocaleDateString('ru-RU', {day: 'numeric', month: 'short'});
+  if (date.getFullYear() !== now.getFullYear()) {
+    const fullDate = date.toLocaleDateString('ru-RU', {day: 'numeric', month: 'short', year: 'numeric'});
+    return `Был(а) ${fullDate} в ${time}`;
+  }
+  return `Был(а) ${dateStr} в ${time}`;
+}
+
 export default function HomeScreen({route, navigation}) {
   const {username, token, isAdmin = false} = route.params;
 
@@ -220,7 +249,9 @@ export default function HomeScreen({route, navigation}) {
     console.log('[HomeScreen] User offline:', data.username);
     setUsers(prevUsers =>
       prevUsers.map(user =>
-        user.username === data.username ? {...user, isOnline: false} : user,
+        user.username === data.username
+          ? {...user, isOnline: false, lastSeen: data.lastSeen || Date.now()}
+          : user,
       ),
     );
   };
@@ -431,7 +462,7 @@ export default function HomeScreen({route, navigation}) {
                 styles.status,
                 isOnline ? styles.statusOnline : styles.statusOffline,
               ]}>
-              {isOnline ? '● В сети' : '○ Не в сети'}
+              {isOnline ? '● В сети' : `○ ${formatLastSeen(item.lastSeen)}`}
             </Text>
           </View>
         </View>

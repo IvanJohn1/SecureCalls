@@ -21,18 +21,18 @@ class WindowsNotificationService {
   }
 
   async requestPermission() {
-    // Windows doesn't need explicit notification permission
     return true;
   }
 
   async getToken() {
-    // No FCM token on Windows — return null
-    // Server will use socket-only delivery for Windows clients
     return null;
   }
 
+  async cancelAllNotifications() {
+    // No-op on Windows
+  }
+
   async showNotification(title, body, data = {}) {
-    // On Windows, use the Notification API if available
     try {
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         new Notification(title, {body, data});

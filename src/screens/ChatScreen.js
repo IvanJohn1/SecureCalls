@@ -21,11 +21,15 @@ import {SERVER_URL} from '../config/server.config';
 
 /**
  * ═══════════════════════════════════════════════════════════
- * ChatScreen v10.0 — READ RECEIPTS + CLICKABLE LINKS +
- *                     MEDIA ATTACHMENTS + INLINE PREVIEW
+ * ChatScreen v11.0 — SELECTABLE TEXT + DATES + LAST SEEN
  * ═══════════════════════════════════════════════════════════
  *
- * NEW:
+ * v11.0:
+ * 1. All message text is selectable/copyable (not just links)
+ * 2. Date separators between message groups
+ * 3. Last seen online status in header
+ *
+ * v10.0:
  * 1. Message status: ✓ sent, ✓✓ delivered, ✓✓ (blue) read
  * 2. URLs in messages are clickable (auto-detected)
  * 3. Media attachments: photo/video from gallery
@@ -40,8 +44,49 @@ const MAX_IMAGE_WIDTH = SCREEN_WIDTH * 0.6;
 const URL_REGEX = /(https?:\/\/[^\s<>\"\']+)/gi;
 
 console.log('╔════════════════════════════════════════╗');
-console.log('║  ChatScreen v10.0 MEDIA + LINKS        ║');
+console.log('║  ChatScreen v11.0 SELECTABLE + DATES   ║');
 console.log('╚════════════════════════════════════════╝');
+
+/**
+ * Date helpers
+ */
+function isSameDay(d1, d2) {
+  return d1.getDate() === d2.getDate() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getFullYear() === d2.getFullYear();
+}
+
+function formatMessageDate(date) {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  if (isSameDay(date, today)) return 'Сегодня';
+  if (isSameDay(date, yesterday)) return 'Вчера';
+
+  const options = {day: 'numeric', month: 'long'};
+  if (date.getFullYear() !== today.getFullYear()) {
+    options.year = 'numeric';
+  }
+  return date.toLocaleDateString('ru-RU', options);
+}
+
+function formatLastSeen(timestamp) {
+  if (!timestamp) return 'не в сети';
+
+  const date = new Date(timestamp);
+  const now = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const time = date.toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'});
+
+  if (isSameDay(date, now)) return `был(а) сегодня в ${time}`;
+  if (isSameDay(date, yesterday)) return `был(а) вчера в ${time}`;
+
+  const dateStr = date.toLocaleDateString('ru-RU', {day: 'numeric', month: 'short'});
+  return `был(а) ${dateStr} в ${time}`;
+}
 
 /**
  * Parse message text into segments: text and links
@@ -77,13 +122,15 @@ export default function ChatScreen({route, navigation}) {
   const [isConnected, setIsConnected] = useState(true);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [peerOnline, setPeerOnline] = useState(null);
+  const [peerLastSeen, setPeerLastSeen] = useState(null);
 
   const flatListRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const isMountedRef = useRef(true);
 
   useEffect(() => {
-    console.log('[ChatScreen v10.0] Открыт чат с:', targetUser);
+    console.log('[ChatScreen v11.0] Открыт чат с:', targetUser);
 
     isMountedRef.current = true;
 
@@ -96,6 +143,7 @@ export default function ChatScreen({route, navigation}) {
     }
 
     SocketService.getMessageHistory(targetUser);
+    SocketService.getUsers(true); // request user list to get peer status
     setupSocketListeners();
 
     const checkConnection = setInterval(() => {
@@ -124,6 +172,9 @@ export default function ChatScreen({route, navigation}) {
     SocketService.on('message_delivered', handleMessageDelivered);
     SocketService.on('disconnect', handleDisconnect);
     SocketService.on('connect', handleReconnect);
+    SocketService.on('users_list', handleUsersList);
+    SocketService.on('user_online', handleUserOnline);
+    SocketService.on('user_offline', handleUserOffline);
   };
 
   const cleanupSocketListeners = () => {
@@ -135,6 +186,9 @@ export default function ChatScreen({route, navigation}) {
     SocketService.off('message_delivered', handleMessageDelivered);
     SocketService.off('disconnect', handleDisconnect);
     SocketService.off('connect', handleReconnect);
+    SocketService.off('users_list', handleUsersList);
+    SocketService.off('user_online', handleUserOnline);
+    SocketService.off('user_offline', handleUserOffline);
   };
 
   const handleDisconnect = () => {
@@ -147,6 +201,36 @@ export default function ChatScreen({route, navigation}) {
     if (isMountedRef.current) {
       setIsConnected(true);
       SocketService.getMessageHistory(targetUser);
+      SocketService.getUsers(true);
+    }
+  };
+
+  const handleUsersList = (usersList) => {
+    if (!isMountedRef.current) return;
+    const peer = usersList.find(u => u.username === targetUser);
+    if (peer) {
+      const online = peer.isOnline || peer.online;
+      setPeerOnline(online);
+      if (!online && peer.lastSeen) {
+        setPeerLastSeen(peer.lastSeen);
+      } else if (!online && !peer.lastSeen) {
+        // Server didn't send lastSeen, keep existing
+      }
+    }
+  };
+
+  const handleUserOnline = (data) => {
+    if (!isMountedRef.current) return;
+    if (data.username === targetUser) {
+      setPeerOnline(true);
+    }
+  };
+
+  const handleUserOffline = (data) => {
+    if (!isMountedRef.current) return;
+    if (data.username === targetUser) {
+      setPeerOnline(false);
+      setPeerLastSeen(data.lastSeen || Date.now());
     }
   };
 
@@ -518,9 +602,9 @@ export default function ChatScreen({route, navigation}) {
   };
 
   /**
-   * Render message bubble
+   * Render message bubble with date separators
    */
-  const renderMessage = ({item}) => {
+  const renderMessage = ({item, index}) => {
     const isMine = item.isMine || item.from === username;
     const timestamp = new Date(item.timestamp);
     const timeString = timestamp.toLocaleTimeString('ru-RU', {
@@ -530,40 +614,59 @@ export default function ChatScreen({route, navigation}) {
 
     const hasMedia = !!item.mediaUrl;
 
+    // Date separator: in inverted list, index+1 is visually above (older)
+    // Show separator when the next (older) message is from a different day, or this is the oldest message
+    const nextMessage = messages[index + 1];
+    const showDateSeparator = !nextMessage || !isSameDay(timestamp, new Date(nextMessage.timestamp));
+
     return (
-      <View
-        style={[
-          styles.messageContainer,
-          isMine ? styles.myMessageContainer : styles.theirMessageContainer,
-        ]}>
+      <View>
+        {/* Message bubble */}
         <View
           style={[
-            styles.messageBubble,
-            isMine ? styles.myMessageBubble : styles.theirMessageBubble,
-            hasMedia && styles.mediaBubble,
+            styles.messageContainer,
+            isMine ? styles.myMessageContainer : styles.theirMessageContainer,
           ]}>
-          {/* Media preview */}
-          {renderMediaPreview(item)}
+          <View
+            style={[
+              styles.messageBubble,
+              isMine ? styles.myMessageBubble : styles.theirMessageBubble,
+              hasMedia && styles.mediaBubble,
+            ]}>
+            {/* Media preview */}
+            {renderMediaPreview(item)}
 
-          {/* Message text with clickable links */}
-          {item.message && !(hasMedia && (item.message === '📷 Фото' || item.message === '📹 Видео')) && (
-            <Text>
-              {renderMessageTextWithLinks(item.message, isMine)}
-            </Text>
-          )}
+            {/* Message text with clickable links — selectable for copy */}
+            {item.message && !(hasMedia && (item.message === '📷 Фото' || item.message === '📹 Видео')) && (
+              <Text selectable={true}>
+                {renderMessageTextWithLinks(item.message, isMine)}
+              </Text>
+            )}
 
-          {/* Timestamp + status row */}
-          <View style={styles.timestampRow}>
-            <Text
-              style={[
-                styles.timestamp,
-                isMine ? styles.myTimestamp : styles.theirTimestamp,
-              ]}>
-              {timeString}
-            </Text>
-            {renderMessageStatus(item)}
+            {/* Timestamp + status row */}
+            <View style={styles.timestampRow}>
+              <Text
+                style={[
+                  styles.timestamp,
+                  isMine ? styles.myTimestamp : styles.theirTimestamp,
+                ]}>
+                {timeString}
+              </Text>
+              {renderMessageStatus(item)}
+            </View>
           </View>
         </View>
+
+        {/* Date separator (visually above this group in inverted list) */}
+        {showDateSeparator && (
+          <View style={styles.dateSeparator}>
+            <View style={styles.dateSeparatorLine} />
+            <Text style={styles.dateSeparatorText}>
+              {formatMessageDate(timestamp)}
+            </Text>
+            <View style={styles.dateSeparatorLine} />
+          </View>
+        )}
       </View>
     );
   };
@@ -584,10 +687,15 @@ export default function ChatScreen({route, navigation}) {
         </TouchableOpacity>
         <View style={styles.headerInfo}>
           <Text style={styles.headerTitle}>{targetUser}</Text>
-          {isTyping && <Text style={styles.typingText}>печатает...</Text>}
-          {!isConnected && (
+          {!isConnected ? (
             <Text style={styles.disconnectedText}>○ Нет соединения</Text>
-          )}
+          ) : isTyping ? (
+            <Text style={styles.typingText}>печатает...</Text>
+          ) : peerOnline === true ? (
+            <Text style={styles.onlineText}>в сети</Text>
+          ) : peerOnline === false ? (
+            <Text style={styles.lastSeenText}>{formatLastSeen(peerLastSeen)}</Text>
+          ) : null}
         </View>
       </View>
 
@@ -691,6 +799,16 @@ const styles = StyleSheet.create({
     color: '#FF5252',
     marginTop: 2,
   },
+  onlineText: {
+    fontSize: 14,
+    color: '#81C784',
+    marginTop: 2,
+  },
+  lastSeenText: {
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.65)',
+    marginTop: 2,
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -703,6 +821,23 @@ const styles = StyleSheet.create({
   messagesList: {
     padding: 15,
     paddingBottom: 10,
+  },
+  dateSeparator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 15,
+    paddingHorizontal: 20,
+  },
+  dateSeparatorLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#d0d0d0',
+  },
+  dateSeparatorText: {
+    fontSize: 13,
+    color: '#888',
+    marginHorizontal: 12,
+    fontWeight: '500',
   },
   messageContainer: {
     marginBottom: 10,

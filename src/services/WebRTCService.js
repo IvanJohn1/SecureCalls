@@ -1,10 +1,18 @@
-import {
-  RTCPeerConnection,
-  RTCIceCandidate,
-  RTCSessionDescription,
-  mediaDevices,
-} from 'react-native-webrtc';
 import {SERVER_URL} from '../config/server.config';
+
+// Dynamic import — react-native-webrtc is unavailable on Windows
+let RTCPeerConnection, RTCIceCandidate, RTCSessionDescription, mediaDevices;
+let webrtcAvailable = false;
+try {
+  const webrtc = require('react-native-webrtc');
+  RTCPeerConnection = webrtc.RTCPeerConnection;
+  RTCIceCandidate = webrtc.RTCIceCandidate;
+  RTCSessionDescription = webrtc.RTCSessionDescription;
+  mediaDevices = webrtc.mediaDevices;
+  webrtcAvailable = true;
+} catch (e) {
+  console.warn('[WebRTCService] react-native-webrtc not available:', e.message);
+}
 
 // Fallback ICE серверы (STUN-только, используются если сервер недоступен)
 const DEFAULT_ICE_SERVERS = [
@@ -89,7 +97,14 @@ class WebRTCService {
   /**
    * Получение локального медиа потока
    */
+  isAvailable() {
+    return webrtcAvailable;
+  }
+
   async getLocalStream(isVideo = false) {
+    if (!webrtcAvailable) {
+      throw new Error('WebRTC не поддерживается на этой платформе');
+    }
     console.log('WebRTC v9.0: ПОЛУЧЕНИЕ МЕДИА ПОТОКА, видео:', isVideo);
 
     try {
@@ -136,6 +151,9 @@ class WebRTCService {
    * Создание PeerConnection с Signal-style ICE конфигурацией
    */
   createPeerConnection() {
+    if (!webrtcAvailable) {
+      throw new Error('WebRTC не поддерживается на этой платформе');
+    }
     console.log('WebRTC v10.0: СОЗДАНИЕ PEER CONNECTION');
 
     try {
