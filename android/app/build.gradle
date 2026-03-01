@@ -45,14 +45,14 @@ android {
 
     namespace "com.securecallapp"
 
-    // Java 17 обязательна для Android 15 (API 35)
+    // Java 21 для лучшей совместимости (поддерживается Android 15)
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
 
     kotlinOptions {
-        jvmTarget = '17'
+        jvmTarget = '21'
     }
 
     defaultConfig {
@@ -217,7 +217,7 @@ dependencies {
     implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
 
     // ═══════════════════════════════════════════════════════════
-    // РУЧНОЕ ПОДКЛЮЧЕНИЕ МОДУЛЕЙ 
+    // РУЧНОЕ ПОДКЛЮЧЕНИЕ МОДУЛЕЙ
     // ═══════════════════════════════════════════════════════════
     implementation project(':react-native-webrtc')
     implementation project(':notifee_react-native')
@@ -228,6 +228,7 @@ dependencies {
     implementation project(':react-native-reanimated')
     implementation project(':react-native-safe-area-context')
     implementation project(':react-native-screens')
+    implementation project(':react-native-image-picker')
 
     // Навигация
     implementation 'androidx.navigation:navigation-fragment-ktx:2.7.7'
