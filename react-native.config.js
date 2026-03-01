@@ -1,12 +1,22 @@
+/**
+ * react-native.config.js
+ *
+ * Конфигурация для всех платформ: Android, iOS, Windows.
+ * ВАЖНО: Этот файл критичен для `react-native run-windows` —
+ * без блока `windows` команда не находит .sln файл.
+ */
 module.exports = {
   project: {
+    android: {
+      sourceDir: './android',
+    },
     ios: {},
-    android: {},
-  },
-  dependency: {
-    platforms: {
-      android: null,
-      ios: null,
+    windows: {
+      sourceDir: './windows',
+      solutionFile: 'SecureCallApp.sln',
+      project: {
+        projectFile: 'SecureCallApp\\SecureCallApp.csproj',
+      },
     },
   },
 };
