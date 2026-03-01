@@ -289,7 +289,9 @@ export default function ChatScreen({route, navigation}) {
   };
 
   /**
-   * [v10.0] Pick and send media from gallery
+   * [v11.0] Pick and send media — Camera / Gallery / File
+   * Android: показывает ActionSheet с выбором источника
+   * Windows: показывает предупреждение (image-picker не поддерживается)
    */
   const pickMedia = async () => {
     if (!SocketService.isConnected()) {
@@ -297,79 +299,118 @@ export default function ChatScreen({route, navigation}) {
       return;
     }
 
+    if (Platform.OS === 'windows') {
+      Alert.alert(
+        'Ограничение Windows',
+        'Отправка вложений пока не поддерживается в десктопной версии Windows.\n\nИспользуйте мобильное приложение для отправки фото и видео.',
+      );
+      return;
+    }
+
+    // Android/iOS: показываем выбор источника
+    Alert.alert(
+      'Выберите источник',
+      'Откуда загрузить файл?',
+      [
+        {text: 'Камера', onPress: () => launchSource('camera')},
+        {text: 'Галерея', onPress: () => launchSource('gallery')},
+        {text: 'Отмена', style: 'cancel'},
+      ],
+    );
+  };
+
+  /**
+   * Запуск камеры или галереи
+   */
+  const launchSource = async (source) => {
     try {
-      // Dynamic import to avoid crash if library not installed
       const ImagePicker = require('react-native-image-picker');
 
-      ImagePicker.launchImageLibrary(
-        {
-          mediaType: 'mixed',
-          maxWidth: 1280,
-          maxHeight: 1280,
-          quality: 0.7, // Compression like Telegram
-          videoQuality: 'medium',
-          includeBase64: false,
-        },
-        async (response) => {
-          if (response.didCancel) return;
-          if (response.errorCode) {
-            console.error('[ChatScreen] ImagePicker error:', response.errorMessage);
+      const options = {
+        mediaType: 'mixed',
+        maxWidth: 1280,
+        maxHeight: 1280,
+        quality: 0.7,
+        videoQuality: 'medium',
+        includeBase64: false,
+      };
+
+      const callback = async (response) => {
+        if (response.didCancel) return;
+        if (response.errorCode) {
+          console.error('[ChatScreen] ImagePicker error:', response.errorCode, response.errorMessage);
+          if (response.errorCode === 'camera_unavailable') {
+            Alert.alert('Ошибка', 'Камера недоступна');
+          } else if (response.errorCode === 'permission') {
+            Alert.alert('Ошибка', 'Нет разрешения на доступ к камере/галерее');
+          } else {
             Alert.alert('Ошибка', 'Не удалось выбрать файл');
-            return;
           }
-
-          const asset = response.assets?.[0];
-          if (!asset) return;
-
-          console.log('[ChatScreen] Выбрано:', asset.type, asset.fileSize, 'байт');
-
-          setIsUploading(true);
-          try {
-            const formData = new FormData();
-            formData.append('media', {
-              uri: asset.uri,
-              type: asset.type || 'image/jpeg',
-              name: asset.fileName || `media_${Date.now()}.jpg`,
-            });
-
-            const uploadRes = await fetch(`${SERVER_URL}/upload/media`, {
-              method: 'POST',
-              body: formData,
-              headers: {
-                'Content-Type': 'multipart/form-data',
-              },
-            });
-
-            const uploadData = await uploadRes.json();
-
-            if (uploadData.success) {
-              console.log('[ChatScreen] Загружено:', uploadData.mediaUrl);
-
-              SocketService.sendMediaMessage(
-                targetUser,
-                uploadData.mediaUrl,
-                uploadData.mediaType,
-                uploadData.fileName,
-                uploadData.fileSize,
-                null, // thumbnailUrl — server could generate
-              );
-            } else {
-              Alert.alert('Ошибка', 'Не удалось загрузить файл');
-            }
-          } catch (uploadError) {
-            console.error('[ChatScreen] Upload error:', uploadError);
-            Alert.alert('Ошибка', 'Ошибка загрузки файла');
-          } finally {
-            setIsUploading(false);
-          }
+          return;
         }
-      );
+
+        const asset = response.assets?.[0];
+        if (!asset) return;
+
+        console.log('[ChatScreen] Выбрано:', asset.type, asset.fileSize, 'байт');
+        await uploadAndSendMedia(asset);
+      };
+
+      if (source === 'camera') {
+        ImagePicker.launchCamera(options, callback);
+      } else {
+        ImagePicker.launchImageLibrary(options, callback);
+      }
     } catch (e) {
       console.warn('[ChatScreen] react-native-image-picker не установлен:', e.message);
       Alert.alert(
         'Медиафайлы',
-        'Для отправки фото и видео установите react-native-image-picker:\nnpm install react-native-image-picker'
+        'Для отправки фото и видео установите react-native-image-picker:\nnpm install react-native-image-picker',
       );
+    }
+  };
+
+  /**
+   * Загрузка файла на сервер и отправка через Socket
+   */
+  const uploadAndSendMedia = async (asset) => {
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('media', {
+        uri: asset.uri,
+        type: asset.type || 'image/jpeg',
+        name: asset.fileName || `media_${Date.now()}.jpg`,
+      });
+
+      const uploadRes = await fetch(`${SERVER_URL}/upload/media`, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      const uploadData = await uploadRes.json();
+
+      if (uploadData.success) {
+        console.log('[ChatScreen] Загружено:', uploadData.mediaUrl);
+        SocketService.sendMediaMessage(
+          targetUser,
+          uploadData.mediaUrl,
+          uploadData.mediaType,
+          uploadData.fileName,
+          uploadData.fileSize,
+          null,
+        );
+      } else {
+        Alert.alert('Ошибка', 'Не удалось загрузить файл');
+      }
+    } catch (uploadError) {
+      console.error('[ChatScreen] Upload error:', uploadError);
+      Alert.alert('Ошибка', 'Ошибка загрузки файла');
+    } finally {
+      setIsUploading(false);
     }
   };
 
