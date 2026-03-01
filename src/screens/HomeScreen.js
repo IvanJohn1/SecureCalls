@@ -13,7 +13,7 @@ import {
   NativeModules,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import messaging from '@react-native-firebase/messaging';
+import {getFCMToken} from '../services/FCMService';
 import SocketService from '../services/SocketService';
 import ConnectionService from '../services/ConnectionService';
 
@@ -70,9 +70,9 @@ export default function HomeScreen({route, navigation}) {
    */
   const registerFCMToken = async () => {
     try {
-      const fcmToken = await messaging().getToken();
+      const fcmToken = await getFCMToken();
       console.log('[HomeScreen] 🔔 FCM Token:', fcmToken);
-      
+
       if (fcmToken) {
         SocketService.registerFCMToken(username, fcmToken, 'android');
         console.log('[HomeScreen] ✅ FCM токен зарегистрирован');

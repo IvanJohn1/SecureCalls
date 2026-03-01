@@ -27,6 +27,8 @@
 const fs   = require('fs');
 const path = require('path');
 
+const REANIMATED = path.join(__dirname, '..', 'node_modules', 'react-native-reanimated');
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Version check: patches only needed for reanimated ≤ 3.8.x (NDK r27 compat)
 // Reanimated ≥ 3.16 already includes these fixes upstream.
@@ -74,7 +76,6 @@ function patchFile(filePath, patches) {
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. react-native-reanimated NDK r27 patches
 // ─────────────────────────────────────────────────────────────────────────────
-const REANIMATED = path.join(__dirname, '..', 'node_modules', 'react-native-reanimated');
 
 patchFile(
   path.join(REANIMATED, 'Common/cpp/ReanimatedRuntime/WorkletRuntimeDecorator.cpp'),

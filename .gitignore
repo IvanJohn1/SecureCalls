@@ -139,6 +139,28 @@ tmp/
 temp/
 
 ##################################################
+# Windows (react-native-windows)
+##################################################
+
+windows/x64/
+windows/x86/
+windows/ARM/
+windows/ARM64/
+windows/Bundle/
+windows/.vs/
+windows/packages/
+windows/bin/
+windows/obj/
+**/bin/
+**/obj/
+*.appx
+*.msix
+*.suo
+*.user
+*.sln.docstates
+*.appxrecipe
+
+##################################################
 # VS Code
 ##################################################
 
