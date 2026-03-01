@@ -4,6 +4,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   FlatList,
   StyleSheet,
   KeyboardAvoidingView,
@@ -372,86 +373,180 @@ export default function ChatScreen({route, navigation}) {
   };
 
   /**
-   * [v10.0] Pick and send media from gallery
+   * Upload a picked asset to server and send as media message
    */
-  const pickMedia = async () => {
+  const uploadAndSendMedia = async (asset) => {
+    if (!asset) return;
+    console.log('[ChatScreen] Выбрано:', asset.type, asset.fileSize, 'байт');
+
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('media', {
+        uri: asset.uri,
+        type: asset.type || 'image/jpeg',
+        name: asset.fileName || `media_${Date.now()}.jpg`,
+      });
+
+      const uploadRes = await fetch(`${SERVER_URL}/upload/media`, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      const uploadData = await uploadRes.json();
+
+      if (uploadData.success) {
+        console.log('[ChatScreen] Загружено:', uploadData.mediaUrl);
+        SocketService.sendMediaMessage(
+          targetUser,
+          uploadData.mediaUrl,
+          uploadData.mediaType,
+          uploadData.fileName,
+          uploadData.fileSize,
+          null,
+        );
+      } else {
+        Alert.alert('Ошибка', 'Не удалось загрузить файл');
+      }
+    } catch (uploadError) {
+      console.error('[ChatScreen] Upload error:', uploadError);
+      Alert.alert('Ошибка', 'Ошибка загрузки файла');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  /**
+   * ImagePicker callback handler (shared by camera and gallery)
+   */
+  const handlePickerResponse = (response) => {
+    if (response.didCancel) return;
+    if (response.errorCode) {
+      console.error('[ChatScreen] ImagePicker error:', response.errorCode, response.errorMessage);
+      Alert.alert('Ошибка', response.errorMessage || 'Не удалось выбрать файл');
+      return;
+    }
+    const asset = response.assets?.[0];
+    if (asset) {
+      uploadAndSendMedia(asset);
+    }
+  };
+
+  /**
+   * [v11.0] Pick media — shows options: Camera / Gallery / Files
+   * Works on Android, iOS, and Windows
+   */
+  const pickMedia = () => {
     if (!SocketService.isConnected()) {
       Alert.alert('Ошибка', 'Нет подключения к серверу');
       return;
     }
 
+    let ImagePicker;
     try {
-      // Dynamic import to avoid crash if library not installed
-      const ImagePicker = require('react-native-image-picker');
+      ImagePicker = require('react-native-image-picker');
+    } catch (e) {
+      console.warn('[ChatScreen] react-native-image-picker not available:', e.message);
+    }
 
+    const pickerOptions = {
+      mediaType: 'mixed',
+      maxWidth: 1280,
+      maxHeight: 1280,
+      quality: 0.7,
+      videoQuality: 'medium',
+      includeBase64: false,
+    };
+
+    // Build action buttons based on available capabilities
+    const buttons = [];
+
+    if (ImagePicker?.launchCamera) {
+      buttons.push({
+        text: 'Камера',
+        onPress: () => {
+          ImagePicker.launchCamera(
+            {...pickerOptions, mediaType: 'photo'},
+            handlePickerResponse,
+          );
+        },
+      });
+    }
+
+    if (ImagePicker?.launchImageLibrary) {
+      buttons.push({
+        text: 'Галерея',
+        onPress: () => {
+          ImagePicker.launchImageLibrary(pickerOptions, handlePickerResponse);
+        },
+      });
+    }
+
+    // Try document picker for broader file access (Android file manager, Windows files)
+    buttons.push({
+      text: 'Файлы',
+      onPress: () => pickFromFiles(),
+    });
+
+    buttons.push({text: 'Отмена', style: 'cancel'});
+
+    if (buttons.length <= 2) {
+      // Only "Файлы" + "Отмена" — image picker unavailable
+      pickFromFiles();
+      return;
+    }
+
+    Alert.alert('Прикрепить', 'Выберите источник', buttons);
+  };
+
+  /**
+   * Pick files via DocumentPicker (works on Android, Windows, iOS)
+   * Falls back to ImagePicker gallery if DocumentPicker unavailable
+   */
+  const pickFromFiles = async () => {
+    // Try react-native-document-picker first
+    try {
+      const DocumentPicker = require('react-native-document-picker').default || require('react-native-document-picker');
+      const result = await DocumentPicker.pick({
+        type: [DocumentPicker.types?.images, DocumentPicker.types?.video, DocumentPicker.types?.allFiles].filter(Boolean),
+        allowMultiSelection: false,
+      });
+
+      const file = Array.isArray(result) ? result[0] : result;
+      if (file) {
+        uploadAndSendMedia({
+          uri: file.uri,
+          type: file.type || 'application/octet-stream',
+          fileName: file.name || `file_${Date.now()}`,
+          fileSize: file.size || 0,
+        });
+      }
+      return;
+    } catch (e) {
+      if (e?.code === 'DOCUMENT_PICKER_CANCELED') return;
+      console.warn('[ChatScreen] DocumentPicker not available:', e.message);
+    }
+
+    // Fallback: try image picker gallery
+    try {
+      const ImagePicker = require('react-native-image-picker');
       ImagePicker.launchImageLibrary(
         {
           mediaType: 'mixed',
           maxWidth: 1280,
           maxHeight: 1280,
-          quality: 0.7, // Compression like Telegram
-          videoQuality: 'medium',
+          quality: 0.7,
           includeBase64: false,
         },
-        async (response) => {
-          if (response.didCancel) return;
-          if (response.errorCode) {
-            console.error('[ChatScreen] ImagePicker error:', response.errorMessage);
-            Alert.alert('Ошибка', 'Не удалось выбрать файл');
-            return;
-          }
-
-          const asset = response.assets?.[0];
-          if (!asset) return;
-
-          console.log('[ChatScreen] Выбрано:', asset.type, asset.fileSize, 'байт');
-
-          setIsUploading(true);
-          try {
-            const formData = new FormData();
-            formData.append('media', {
-              uri: asset.uri,
-              type: asset.type || 'image/jpeg',
-              name: asset.fileName || `media_${Date.now()}.jpg`,
-            });
-
-            const uploadRes = await fetch(`${SERVER_URL}/upload/media`, {
-              method: 'POST',
-              body: formData,
-              headers: {
-                'Content-Type': 'multipart/form-data',
-              },
-            });
-
-            const uploadData = await uploadRes.json();
-
-            if (uploadData.success) {
-              console.log('[ChatScreen] Загружено:', uploadData.mediaUrl);
-
-              SocketService.sendMediaMessage(
-                targetUser,
-                uploadData.mediaUrl,
-                uploadData.mediaType,
-                uploadData.fileName,
-                uploadData.fileSize,
-                null, // thumbnailUrl — server could generate
-              );
-            } else {
-              Alert.alert('Ошибка', 'Не удалось загрузить файл');
-            }
-          } catch (uploadError) {
-            console.error('[ChatScreen] Upload error:', uploadError);
-            Alert.alert('Ошибка', 'Ошибка загрузки файла');
-          } finally {
-            setIsUploading(false);
-          }
-        }
+        handlePickerResponse,
       );
     } catch (e) {
-      console.warn('[ChatScreen] react-native-image-picker не установлен:', e.message);
       Alert.alert(
-        'Медиафайлы',
-        'Для отправки фото и видео установите react-native-image-picker:\nnpm install react-native-image-picker'
+        'Файлы',
+        'Для отправки файлов установите одну из библиотек:\n\nnpm install react-native-document-picker\nили\nnpm install react-native-image-picker',
       );
     }
   };
@@ -509,6 +604,31 @@ export default function ChatScreen({route, navigation}) {
   }, [openLink]);
 
   /**
+   * Long-press on message bubble: copy full message text
+   */
+  const handleMessageLongPress = useCallback((text) => {
+    if (!text) return;
+    Alert.alert(
+      'Сообщение',
+      text.length > 200 ? text.substring(0, 200) + '...' : text,
+      [
+        {
+          text: 'Копировать',
+          onPress: () => {
+            try {
+              const Clip = require('@react-native-clipboard/clipboard').default;
+              Clip.setString(text);
+            } catch (e) {
+              Share.share({message: text}).catch(() => {});
+            }
+          },
+        },
+        {text: 'Отмена', style: 'cancel'},
+      ],
+    );
+  }, []);
+
+  /**
    * Render message text with clickable links
    */
   const renderMessageTextWithLinks = (text, isMine) => {
@@ -519,6 +639,7 @@ export default function ChatScreen({route, navigation}) {
         return (
           <Text
             key={index}
+            selectable={true}
             style={[
               styles.messageText,
               isMine ? styles.myMessageText : styles.theirMessageText,
@@ -621,13 +742,14 @@ export default function ChatScreen({route, navigation}) {
 
     return (
       <View>
-        {/* Message bubble */}
+        {/* Message bubble — long press to copy */}
         <View
           style={[
             styles.messageContainer,
             isMine ? styles.myMessageContainer : styles.theirMessageContainer,
           ]}>
-          <View
+          <Pressable
+            onLongPress={() => handleMessageLongPress(item.message)}
             style={[
               styles.messageBubble,
               isMine ? styles.myMessageBubble : styles.theirMessageBubble,
@@ -636,7 +758,7 @@ export default function ChatScreen({route, navigation}) {
             {/* Media preview */}
             {renderMediaPreview(item)}
 
-            {/* Message text with clickable links — selectable for copy */}
+            {/* Message text with clickable links — all parts selectable */}
             {item.message && !(hasMedia && (item.message === '📷 Фото' || item.message === '📹 Видео')) && (
               <Text selectable={true}>
                 {renderMessageTextWithLinks(item.message, isMine)}
@@ -654,7 +776,7 @@ export default function ChatScreen({route, navigation}) {
               </Text>
               {renderMessageStatus(item)}
             </View>
-          </View>
+          </Pressable>
         </View>
 
         {/* Date separator (visually above this group in inverted list) */}

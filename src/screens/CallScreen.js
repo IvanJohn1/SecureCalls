@@ -8,18 +8,11 @@ import {
   Alert,
   Dimensions,
 } from 'react-native';
+import {RTCView} from 'react-native-webrtc';
 import SocketService from '../services/SocketService';
 import WebRTCService from '../services/WebRTCService';
 import NotificationService from '../services/NotificationService';
 import AudioService from '../services/AudioService';
-
-// Dynamic import — react-native-webrtc may not exist on Windows
-let RTCView = null;
-try {
-  RTCView = require('react-native-webrtc').RTCView;
-} catch (e) {
-  console.warn('[CallScreen] RTCView not available on this platform');
-}
 
 const {width, height} = Dimensions.get('window');
 
@@ -529,7 +522,7 @@ export default function CallScreen({route, navigation}) {
       <StatusBar barStyle="light-content" backgroundColor="#000" />
 
       {/* Remote video */}
-      {remoteStream && isVideo && RTCView ? (
+      {remoteStream && isVideo ? (
         <RTCView
           streamURL={remoteStream.toURL()}
           style={styles.remoteVideo}
@@ -547,7 +540,7 @@ export default function CallScreen({route, navigation}) {
       )}
 
       {/* Local video (PiP) */}
-      {localStream && isVideo && isVideoEnabled && RTCView && (
+      {localStream && isVideo && isVideoEnabled && (
         <View style={styles.localVideoContainer}>
           <RTCView
             streamURL={localStream.toURL()}
