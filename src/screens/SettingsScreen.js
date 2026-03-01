@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useEffect} from 'react';
 import {
   View,
   Text,
@@ -8,88 +8,138 @@ import {
   ScrollView,
   StatusBar,
   Switch,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SocketService from '../services/SocketService';
 import ConnectionService from '../services/ConnectionService';
+import {useTheme} from '../theme/ThemeContext';
 
 /**
- * ═══════════════════════════════════════════════════════════
- * SettingsScreen - НОВЫЙ ЭКРАН
- * ═══════════════════════════════════════════════════════════
- * 
- * Возможности:
- * - Просмотр информации о аккаунте
- * - Удаление своего аккаунта
- * - Настройки уведомлений
- * - Переход в админ-панель (если админ)
+ * SettingsScreen v8.0 — Theme + Volume Controls
+ *
+ * - Dark/Light theme toggle (Telegram-style)
+ * - Microphone volume slider
+ * - Speaker volume slider
+ * - Account info, delete, admin panel
  */
+
+const VOLUME_MIC_KEY = 'settings_mic_volume';
+const VOLUME_SPEAKER_KEY = 'settings_speaker_volume';
 
 export default function SettingsScreen({route, navigation}) {
   const {username, isAdmin} = route.params;
+  const {colors, isDark, toggleTheme} = useTheme();
   const [isDeleting, setIsDeleting] = useState(false);
+  const [micVolume, setMicVolume] = useState(80);
+  const [speakerVolume, setSpeakerVolume] = useState(80);
 
-  /**
-   * Удалить свой аккаунт
-   */
+  useEffect(() => {
+    loadVolumeSettings();
+  }, []);
+
+  const loadVolumeSettings = async () => {
+    try {
+      const mic = await AsyncStorage.getItem(VOLUME_MIC_KEY);
+      const spk = await AsyncStorage.getItem(VOLUME_SPEAKER_KEY);
+      if (mic !== null) setMicVolume(parseInt(mic, 10));
+      if (spk !== null) setSpeakerVolume(parseInt(spk, 10));
+    } catch (_) {}
+  };
+
+  const saveMicVolume = async (val) => {
+    setMicVolume(val);
+    await AsyncStorage.setItem(VOLUME_MIC_KEY, String(val)).catch(() => {});
+  };
+
+  const saveSpeakerVolume = async (val) => {
+    setSpeakerVolume(val);
+    await AsyncStorage.setItem(VOLUME_SPEAKER_KEY, String(val)).catch(() => {});
+  };
+
+  // Simple step buttons since Slider may not be available on all platforms
+  const VolumeControl = ({label, icon, value, onChange}) => (
+    <View style={[s.volumeCard, {backgroundColor: colors.card}]}>
+      <View style={s.volumeHeader}>
+        <Text style={[s.volumeIcon]}>{icon}</Text>
+        <Text style={[s.volumeLabel, {color: colors.text}]}>{label}</Text>
+        <Text style={[s.volumeValue, {color: colors.primary}]}>{value}%</Text>
+      </View>
+      <View style={s.volumeBarOuter}>
+        <View
+          style={[
+            s.volumeBarInner,
+            {width: `${value}%`, backgroundColor: colors.primary},
+          ]}
+        />
+      </View>
+      <View style={s.volumeButtons}>
+        <TouchableOpacity
+          style={[s.volBtn, {backgroundColor: colors.inputBg}]}
+          onPress={() => onChange(Math.max(0, value - 10))}>
+          <Text style={[s.volBtnText, {color: colors.text}]}>-10</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[s.volBtn, {backgroundColor: colors.inputBg}]}
+          onPress={() => onChange(Math.max(0, value - 5))}>
+          <Text style={[s.volBtnText, {color: colors.text}]}>-5</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[s.volBtn, {backgroundColor: colors.inputBg}]}
+          onPress={() => onChange(50)}>
+          <Text style={[s.volBtnText, {color: colors.textSecondary}]}>50</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[s.volBtn, {backgroundColor: colors.inputBg}]}
+          onPress={() => onChange(Math.min(100, value + 5))}>
+          <Text style={[s.volBtnText, {color: colors.text}]}>+5</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[s.volBtn, {backgroundColor: colors.inputBg}]}
+          onPress={() => onChange(Math.min(100, value + 10))}>
+          <Text style={[s.volBtnText, {color: colors.text}]}>+10</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   const handleDeleteAccount = () => {
     Alert.alert(
-      '⚠️ Удаление аккаунта',
-      'Вы уверены, что хотите удалить свой аккаунт? Это действие нельзя отменить. Все ваши сообщения и данные будут удалены.',
+      'Удаление аккаунта',
+      'Вы уверены? Это действие нельзя отменить. Все данные будут удалены.',
       [
         {text: 'Отмена', style: 'cancel'},
-        {
-          text: 'Удалить',
-          style: 'destructive',
-          onPress: confirmDeleteAccount,
-        },
-      ]
+        {text: 'Удалить', style: 'destructive', onPress: confirmDeleteAccount},
+      ],
     );
   };
 
   const confirmDeleteAccount = () => {
     Alert.alert(
-      '⚠️ Последнее предупреждение',
+      'Последнее предупреждение',
       'Вы ДЕЙСТВИТЕЛЬНО хотите удалить аккаунт? Восстановить его будет невозможно!',
       [
         {text: 'Отмена', style: 'cancel'},
-        {
-          text: 'Да, удалить',
-          style: 'destructive',
-          onPress: executeDeleteAccount,
-        },
-      ]
+        {text: 'Да, удалить', style: 'destructive', onPress: executeDeleteAccount},
+      ],
     );
   };
 
   const executeDeleteAccount = async () => {
     setIsDeleting(true);
-
     try {
-      console.log('[Settings] Удаление аккаунта...');
-
-      // Отправить запрос на сервер
       SocketService.deleteMyAccount();
-
-      // Подождать подтверждения
-      const timeout = setTimeout(() => {
-        console.log('[Settings] ⚠️ Таймаут удаления, выход...');
-        performLogout();
-      }, 5000);
-
+      const timeout = setTimeout(() => performLogout(), 5000);
       SocketService.on('account_deleted', () => {
         clearTimeout(timeout);
         performLogout();
       });
-
       SocketService.on('error', data => {
         clearTimeout(timeout);
         Alert.alert('Ошибка', data.message || 'Не удалось удалить аккаунт');
         setIsDeleting(false);
       });
-
     } catch (error) {
-      console.error('[Settings] Ошибка удаления:', error);
       Alert.alert('Ошибка', 'Произошла ошибка при удалении аккаунта');
       setIsDeleting(false);
     }
@@ -97,90 +147,125 @@ export default function SettingsScreen({route, navigation}) {
 
   const performLogout = async () => {
     try {
-      console.log('[Settings] Выход после удаления...');
-      
       await ConnectionService.stop();
       await AsyncStorage.clear();
       SocketService.disconnect(true);
-      
-      Alert.alert(
-        'Аккаунт удален',
-        'Ваш аккаунт успешно удален',
-        [
-          {
-            text: 'OK',
-            onPress: () => navigation.replace('Login'),
-          },
-        ]
-      );
-    } catch (error) {
-      console.error('[Settings] Ошибка выхода:', error);
+      Alert.alert('Аккаунт удален', 'Ваш аккаунт успешно удален', [
+        {text: 'OK', onPress: () => navigation.replace('Login')},
+      ]);
+    } catch (_) {
       navigation.replace('Login');
     }
   };
 
-  const openAdminPanel = () => {
-    navigation.navigate('AdminPanel', {username});
-  };
-
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#667eea" />
+    <View style={[s.container, {backgroundColor: colors.background}]}>
+      <StatusBar
+        barStyle={isDark ? 'light-content' : 'light-content'}
+        backgroundColor={colors.headerBg}
+      />
 
       {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}>
-          <Text style={styles.backButtonText}>←</Text>
+      <View style={[s.header, {backgroundColor: colors.headerBg}]}>
+        <TouchableOpacity style={s.backButton} onPress={() => navigation.goBack()}>
+          <Text style={[s.backButtonText, {color: colors.textOnHeader}]}>
+            {'<-'}
+          </Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Настройки</Text>
+        <Text style={[s.headerTitle, {color: colors.textOnHeader}]}>Настройки</Text>
       </View>
 
-      <ScrollView style={styles.content}>
+      <ScrollView style={s.content}>
         {/* Account Info */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Аккаунт</Text>
-          <View style={styles.infoCard}>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Имя пользователя:</Text>
-              <Text style={styles.infoValue}>{username}</Text>
+        <View style={s.section}>
+          <Text style={[s.sectionTitle, {color: colors.text}]}>Аккаунт</Text>
+          <View style={[s.infoCard, {backgroundColor: colors.card}]}>
+            <View style={s.infoRow}>
+              <Text style={[s.infoLabel, {color: colors.textSecondary}]}>
+                Имя пользователя:
+              </Text>
+              <Text style={[s.infoValue, {color: colors.text}]}>{username}</Text>
             </View>
             {isAdmin && (
-              <View style={styles.adminBadge}>
-                <Text style={styles.adminBadgeText}>👑 Администратор</Text>
+              <View style={[s.adminBadge, {backgroundColor: colors.adminBadge}]}>
+                <Text style={s.adminBadgeText}>Администратор</Text>
               </View>
             )}
           </View>
         </View>
 
+        {/* Theme */}
+        <View style={s.section}>
+          <Text style={[s.sectionTitle, {color: colors.text}]}>Тема оформления</Text>
+          <View style={[s.themeCard, {backgroundColor: colors.card}]}>
+            <View style={s.themeRow}>
+              <Text style={[s.themeIcon]}>
+                {isDark ? '\u{1F319}' : '\u{2600}\u{FE0F}'}
+              </Text>
+              <View style={s.themeTextContainer}>
+                <Text style={[s.themeLabel, {color: colors.text}]}>
+                  {isDark ? 'Тёмная тема' : 'Светлая тема'}
+                </Text>
+                <Text style={[s.themeDescription, {color: colors.textSecondary}]}>
+                  {isDark ? 'Telegram-style тёмное оформление' : 'Стандартное светлое оформление'}
+                </Text>
+              </View>
+              <Switch
+                value={isDark}
+                onValueChange={toggleTheme}
+                trackColor={{false: colors.sliderTrack, true: colors.primary}}
+                thumbColor={isDark ? '#fff' : '#f4f4f4'}
+              />
+            </View>
+          </View>
+        </View>
+
+        {/* Volume Controls */}
+        <View style={s.section}>
+          <Text style={[s.sectionTitle, {color: colors.text}]}>Громкость звонков</Text>
+          <VolumeControl
+            label="Микрофон"
+            icon={'\u{1F3A4}'}
+            value={micVolume}
+            onChange={saveMicVolume}
+          />
+          <View style={{height: 12}} />
+          <VolumeControl
+            label="Динамик"
+            icon={'\u{1F50A}'}
+            value={speakerVolume}
+            onChange={saveSpeakerVolume}
+          />
+        </View>
+
         {/* Admin Panel */}
         {isAdmin && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Администрирование</Text>
+          <View style={s.section}>
+            <Text style={[s.sectionTitle, {color: colors.text}]}>Администрирование</Text>
             <TouchableOpacity
-              style={styles.adminButton}
-              onPress={openAdminPanel}>
-              <Text style={styles.adminButtonIcon}>👑</Text>
-              <Text style={styles.adminButtonText}>Панель администратора</Text>
-              <Text style={styles.adminButtonArrow}>→</Text>
+              style={[s.adminButton, {backgroundColor: colors.adminBadge}]}
+              onPress={() => navigation.navigate('AdminPanel', {username})}>
+              <Text style={s.adminButtonIcon}>{'\u{1F451}'}</Text>
+              <Text style={[s.adminButtonText, {color: '#333'}]}>
+                Панель администратора
+              </Text>
+              <Text style={{fontSize: 24, color: '#333'}}>{'>'}</Text>
             </TouchableOpacity>
           </View>
         )}
 
         {/* Danger Zone */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Опасная зона</Text>
+        <View style={s.section}>
+          <Text style={[s.sectionTitle, {color: colors.error}]}>Опасная зона</Text>
           <TouchableOpacity
-            style={styles.dangerButton}
+            style={[s.dangerButton, {backgroundColor: colors.card, borderColor: colors.dangerBg}]}
             onPress={handleDeleteAccount}
             disabled={isDeleting}>
-            <Text style={styles.dangerButtonIcon}>🗑️</Text>
-            <View style={styles.dangerButtonContent}>
-              <Text style={styles.dangerButtonTitle}>
+            <View style={s.dangerButtonContent}>
+              <Text style={[s.dangerButtonTitle, {color: colors.dangerBg}]}>
                 {isDeleting ? 'Удаление...' : 'Удалить аккаунт'}
               </Text>
-              <Text style={styles.dangerButtonSubtitle}>
+              <Text style={[s.dangerButtonSubtitle, {color: colors.textHint}]}>
                 Это действие нельзя отменить
               </Text>
             </View>
@@ -188,143 +273,105 @@ export default function SettingsScreen({route, navigation}) {
         </View>
 
         {/* About */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>О приложении</Text>
-          <View style={styles.infoCard}>
-            <Text style={styles.aboutText}>SecureCall v7.0</Text>
-            <Text style={styles.aboutText}>Безопасные звонки и чаты</Text>
-            <Text style={styles.aboutText}>call.n8n-auto.space</Text>
+        <View style={s.section}>
+          <Text style={[s.sectionTitle, {color: colors.text}]}>О приложении</Text>
+          <View style={[s.infoCard, {backgroundColor: colors.card}]}>
+            <Text style={[s.aboutText, {color: colors.textSecondary}]}>
+              SecureCall v8.0
+            </Text>
+            <Text style={[s.aboutText, {color: colors.textSecondary}]}>
+              Безопасные звонки и чаты
+            </Text>
+            <Text style={[s.aboutText, {color: colors.textHint}]}>
+              call.n8n-auto.space
+            </Text>
           </View>
         </View>
+
+        <View style={{height: 40}} />
       </ScrollView>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
+const s = StyleSheet.create({
+  container: {flex: 1},
   header: {
-    backgroundColor: '#667eea',
     padding: 15,
     paddingTop: 40,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  backButtonText: {
-    fontSize: 28,
-    color: '#fff',
-  },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginLeft: 10,
-  },
-  content: {
-    flex: 1,
-  },
-  section: {
-    padding: 20,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 12,
-  },
-  infoCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 15,
-  },
+  backButton: {width: 40, height: 40, justifyContent: 'center', alignItems: 'center'},
+  backButtonText: {fontSize: 22, fontWeight: 'bold'},
+  headerTitle: {fontSize: 24, fontWeight: 'bold', marginLeft: 10},
+  content: {flex: 1},
+  section: {padding: 20, paddingBottom: 0},
+  sectionTitle: {fontSize: 18, fontWeight: '600', marginBottom: 12},
+  infoCard: {borderRadius: 12, padding: 15},
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 8,
   },
-  infoLabel: {
-    fontSize: 16,
-    color: '#666',
-  },
-  infoValue: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
+  infoLabel: {fontSize: 16},
+  infoValue: {fontSize: 16, fontWeight: '600'},
   adminBadge: {
-    backgroundColor: '#FFD700',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
     alignSelf: 'flex-start',
     marginTop: 10,
   },
-  adminBadgeText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
+  adminBadgeText: {fontSize: 14, fontWeight: '600', color: '#333'},
+  // Theme card
+  themeCard: {borderRadius: 12, padding: 15},
+  themeRow: {flexDirection: 'row', alignItems: 'center'},
+  themeIcon: {fontSize: 28, marginRight: 12},
+  themeTextContainer: {flex: 1},
+  themeLabel: {fontSize: 16, fontWeight: '600'},
+  themeDescription: {fontSize: 13, marginTop: 2},
+  // Volume control
+  volumeCard: {borderRadius: 12, padding: 15},
+  volumeHeader: {flexDirection: 'row', alignItems: 'center', marginBottom: 10},
+  volumeIcon: {fontSize: 22, marginRight: 10},
+  volumeLabel: {flex: 1, fontSize: 16, fontWeight: '600'},
+  volumeValue: {fontSize: 16, fontWeight: '700'},
+  volumeBarOuter: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(128,128,128,0.2)',
+    overflow: 'hidden',
+    marginBottom: 12,
   },
+  volumeBarInner: {height: '100%', borderRadius: 4},
+  volumeButtons: {flexDirection: 'row', justifyContent: 'space-between'},
+  volBtn: {
+    flex: 1,
+    marginHorizontal: 3,
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  volBtnText: {fontSize: 14, fontWeight: '600'},
+  // Admin
   adminButton: {
-    backgroundColor: '#FFD700',
     borderRadius: 12,
     padding: 15,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  adminButtonIcon: {
-    fontSize: 24,
-    marginRight: 12,
-  },
-  adminButtonText: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-  },
-  adminButtonArrow: {
-    fontSize: 24,
-    color: '#333',
-  },
+  adminButtonIcon: {fontSize: 24, marginRight: 12},
+  adminButtonText: {flex: 1, fontSize: 16, fontWeight: '600'},
+  // Danger
   dangerButton: {
-    backgroundColor: '#fff',
     borderRadius: 12,
     padding: 15,
-    flexDirection: 'row',
-    alignItems: 'center',
     borderWidth: 2,
-    borderColor: '#FF3B30',
   },
-  dangerButtonIcon: {
-    fontSize: 24,
-    marginRight: 12,
-  },
-  dangerButtonContent: {
-    flex: 1,
-  },
-  dangerButtonTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FF3B30',
-  },
-  dangerButtonSubtitle: {
-    fontSize: 14,
-    color: '#999',
-    marginTop: 2,
-  },
-  aboutText: {
-    fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginVertical: 4,
-  },
+  dangerButtonContent: {flex: 1},
+  dangerButtonTitle: {fontSize: 16, fontWeight: '600'},
+  dangerButtonSubtitle: {fontSize: 14, marginTop: 2},
+  aboutText: {fontSize: 14, textAlign: 'center', marginVertical: 4},
 });

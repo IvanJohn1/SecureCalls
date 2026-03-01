@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import SocketService from '../services/SocketService';
 import {SERVER_URL} from '../config/server.config';
+import {useTheme} from '../theme/ThemeContext';
 
 /**
  * ═══════════════════════════════════════════════════════════
@@ -70,6 +71,7 @@ function parseMessageText(text) {
 
 export default function ChatScreen({route, navigation}) {
   const {username, targetUser} = route.params;
+  const {colors, isDark} = useTheme();
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -504,6 +506,8 @@ export default function ChatScreen({route, navigation}) {
     });
 
     const hasMedia = !!item.mediaUrl;
+    const bubbleBg = isMine ? colors.myBubble : colors.theirBubble;
+    const textColor = isMine ? colors.myBubbleText : colors.theirBubbleText;
 
     return (
       <View
@@ -514,25 +518,23 @@ export default function ChatScreen({route, navigation}) {
         <View
           style={[
             styles.messageBubble,
+            {backgroundColor: bubbleBg},
             isMine ? styles.myMessageBubble : styles.theirMessageBubble,
             hasMedia && styles.mediaBubble,
           ]}>
-          {/* Media preview */}
           {renderMediaPreview(item)}
 
-          {/* Message text with clickable links */}
-          {item.message && !(hasMedia && (item.message === '📷 Фото' || item.message === '📹 Видео')) && (
+          {item.message && !(hasMedia && (item.message === '\u{1F4F7} Фото' || item.message === '\u{1F4F9} Видео')) && (
             <Text>
               {renderMessageTextWithLinks(item.message, isMine)}
             </Text>
           )}
 
-          {/* Timestamp + status row */}
           <View style={styles.timestampRow}>
             <Text
               style={[
                 styles.timestamp,
-                isMine ? styles.myTimestamp : styles.theirTimestamp,
+                {color: isMine ? 'rgba(255,255,255,0.6)' : colors.textHint},
               ]}>
               {timeString}
             </Text>
@@ -545,23 +547,23 @@ export default function ChatScreen({route, navigation}) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, {backgroundColor: colors.background}]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
-      <StatusBar barStyle="light-content" backgroundColor="#667eea" />
+      <StatusBar barStyle="light-content" backgroundColor={colors.headerBg} />
 
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, {backgroundColor: colors.headerBg}]}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}>
-          <Text style={styles.backButtonText}>←</Text>
+          <Text style={[styles.backButtonText, {color: colors.textOnHeader}]}>{'<-'}</Text>
         </TouchableOpacity>
         <View style={styles.headerInfo}>
-          <Text style={styles.headerTitle}>{targetUser}</Text>
-          {isTyping && <Text style={styles.typingText}>печатает...</Text>}
+          <Text style={[styles.headerTitle, {color: colors.textOnHeader}]}>{targetUser}</Text>
+          {isTyping && <Text style={[styles.typingText, {color: colors.textOnHeaderHint}]}>печатает...</Text>}
           {!isConnected && (
-            <Text style={styles.disconnectedText}>○ Нет соединения</Text>
+            <Text style={[styles.disconnectedText, {color: colors.error}]}>Нет соединения</Text>
           )}
         </View>
       </View>
@@ -569,7 +571,7 @@ export default function ChatScreen({route, navigation}) {
       {/* Messages List */}
       {isLoadingHistory ? (
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Загрузка сообщений...</Text>
+          <Text style={[styles.loadingText, {color: colors.textHint}]}>Загрузка сообщений...</Text>
         </View>
       ) : (
         <FlatList
@@ -585,26 +587,25 @@ export default function ChatScreen({route, navigation}) {
 
       {/* Upload indicator */}
       {isUploading && (
-        <View style={styles.uploadingBar}>
-          <ActivityIndicator size="small" color="#667eea" />
-          <Text style={styles.uploadingText}>Загрузка файла...</Text>
+        <View style={[styles.uploadingBar, {backgroundColor: colors.primaryLight}]}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={[styles.uploadingText, {color: colors.primary}]}>Загрузка файла...</Text>
         </View>
       )}
 
       {/* Input Area */}
-      <View style={styles.inputContainer}>
-        {/* Attachment button */}
+      <View style={[styles.inputContainer, {backgroundColor: colors.card, borderTopColor: colors.border}]}>
         <TouchableOpacity
           style={styles.attachButton}
           onPress={pickMedia}
           disabled={isUploading}>
-          <Text style={styles.attachButtonText}>📎</Text>
+          <Text style={styles.attachButtonText}>{'\u{1F4CE}'}</Text>
         </TouchableOpacity>
 
         <TextInput
-          style={styles.input}
+          style={[styles.input, {backgroundColor: colors.inputBg, color: colors.text}]}
           placeholder="Введите сообщение..."
-          placeholderTextColor="#999"
+          placeholderTextColor={colors.textHint}
           value={inputText}
           onChangeText={handleTextChange}
           multiline
@@ -614,11 +615,12 @@ export default function ChatScreen({route, navigation}) {
         <TouchableOpacity
           style={[
             styles.sendButton,
-            (!inputText.trim() || !isConnected) && styles.sendButtonDisabled,
+            {backgroundColor: colors.primary},
+            (!inputText.trim() || !isConnected) && {backgroundColor: colors.buttonDisabled},
           ]}
           onPress={sendMessage}
           disabled={!inputText.trim() || !isConnected}>
-          <Text style={styles.sendButtonText}>➤</Text>
+          <Text style={styles.sendButtonText}>{'\u{27A4}'}</Text>
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>

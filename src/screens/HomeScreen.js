@@ -16,6 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {getFCMToken} from '../services/FCMService';
 import SocketService from '../services/SocketService';
 import ConnectionService from '../services/ConnectionService';
+import {useTheme} from '../theme/ThemeContext';
 
 /**
  * ═══════════════════════════════════════════════════════════
@@ -30,6 +31,7 @@ import ConnectionService from '../services/ConnectionService';
 
 export default function HomeScreen({route, navigation}) {
   const {username, token, isAdmin = false} = route.params;
+  const {colors, isDark} = useTheme();
 
   const [users, setUsers] = useState([]);
   const [connectionStatus, setConnectionStatus] = useState('connected');
@@ -399,23 +401,23 @@ export default function HomeScreen({route, navigation}) {
     const isOnline = item.isOnline || item.online;
 
     return (
-      <View style={styles.userCard}>
+      <View style={[styles.userCard, {backgroundColor: colors.card}]}>
         <View style={styles.userInfo}>
           <View
             style={[
               styles.avatar,
-              isOnline ? styles.avatarOnline : styles.avatarOffline,
+              {backgroundColor: isOnline ? colors.avatarBg : colors.avatarOfflineBg},
             ]}>
             <Text style={styles.avatarText}>
               {item.username.substring(0, 2).toUpperCase()}
             </Text>
           </View>
           <View style={styles.userDetails}>
-            <Text style={styles.username}>{item.username}</Text>
+            <Text style={[styles.username, {color: colors.text}]}>{item.username}</Text>
             <Text
               style={[
                 styles.status,
-                isOnline ? styles.statusOnline : styles.statusOffline,
+                {color: isOnline ? colors.online : colors.offline},
               ]}>
               {isOnline ? '● В сети' : '○ Не в сети'}
             </Text>
@@ -424,19 +426,19 @@ export default function HomeScreen({route, navigation}) {
 
         <View style={styles.actions}>
           <TouchableOpacity
-            style={styles.actionButton}
+            style={[styles.actionButton, {backgroundColor: colors.inputBg}]}
             onPress={() => openChat(item.username)}>
             <Text style={styles.actionIcon}>💬</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.actionButton}
+            style={[styles.actionButton, {backgroundColor: colors.inputBg}]}
             onPress={() => makeCall(item.username, false)}>
             <Text style={styles.actionIcon}>📞</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.actionButton}
+            style={[styles.actionButton, {backgroundColor: colors.inputBg}]}
             onPress={() => makeCall(item.username, true)}>
             <Text style={styles.actionIcon}>📹</Text>
           </TouchableOpacity>
@@ -447,8 +449,8 @@ export default function HomeScreen({route, navigation}) {
 
   const renderEmptyList = () => (
     <View style={styles.emptyContainer}>
-      <Text style={styles.emptyText}>Нет других пользователей</Text>
-      <Text style={styles.emptySubtext}>
+      <Text style={[styles.emptyText, {color: colors.textHint}]}>Нет других пользователей</Text>
+      <Text style={[styles.emptySubtext, {color: colors.textHint}]}>
         Зарегистрируйте других пользователей
       </Text>
     </View>
@@ -481,29 +483,28 @@ export default function HomeScreen({route, navigation}) {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#667eea" />
+    <View style={[styles.container, {backgroundColor: colors.background}]}>
+      <StatusBar barStyle="light-content" backgroundColor={colors.headerBg} />
 
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, {backgroundColor: colors.headerBg}]}>
         <View style={styles.headerLeft}>
-          <Text style={styles.headerTitle}>SecureCall</Text>
+          <Text style={[styles.headerTitle, {color: colors.textOnHeader}]}>SecureCall</Text>
           <View style={styles.headerSubtitleRow}>
-            <Text style={styles.headerSubtitle}>Привет, {username}!</Text>
-            {isAdmin && <Text style={styles.adminBadge}>👑</Text>}
+            <Text style={[styles.headerSubtitle, {color: colors.textOnHeaderSub}]}>Привет, {username}!</Text>
+            {isAdmin && <Text style={styles.adminBadge}>{'\u{1F451}'}</Text>}
           </View>
         </View>
         <View style={styles.headerButtons}>
-          {/* НОВОЕ: Кнопка настроек */}
           <TouchableOpacity
             style={styles.headerButton}
             onPress={handleSettingsPress}>
-            <Text style={styles.headerButtonIcon}>⚙️</Text>
+            <Text style={styles.headerButtonIcon}>{'\u{2699}\u{FE0F}'}</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.headerButton}
             onPress={handleLogoutPress}>
-            <Text style={styles.headerButtonIcon}>🚪</Text>
+            <Text style={styles.headerButtonIcon}>{'\u{1F6AA}'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -511,8 +512,8 @@ export default function HomeScreen({route, navigation}) {
       {/* Users List */}
       {isLoading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#667eea" />
-          <Text style={styles.loadingText}>Загрузка пользователей...</Text>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={[styles.loadingText, {color: colors.textSecondary}]}>Загрузка пользователей...</Text>
         </View>
       ) : (
         <FlatList
@@ -525,7 +526,7 @@ export default function HomeScreen({route, navigation}) {
       )}
 
       {/* Connection Status Footer */}
-      <View style={styles.footer}>
+      <View style={[styles.footer, {backgroundColor: colors.card, borderTopColor: colors.border}]}>
         <Text
           style={[
             styles.footerText,

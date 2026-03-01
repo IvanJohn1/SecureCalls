@@ -20,6 +20,7 @@ import React, {useEffect, useRef} from 'react';
 import {NavigationContainer} from '@react-navigation/native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {createNavigationContainerRef} from '@react-navigation/native';
+import {ThemeProvider} from './src/theme/ThemeContext';
 
 // Screens
 import LoginScreen from './src/screens/LoginScreen';
@@ -65,30 +66,32 @@ export default function App() {
   };
 
   return (
-    <NavigationContainer ref={navigationRef} onReady={() => {
-      isNavigationReady.current = true;
-    }}>
-      <Stack.Navigator
-        initialRouteName="Login"
-        screenOptions={{
-          headerShown: false,
-          animation: 'slide_from_right',
-        }}>
-        <Stack.Screen name="Login" component={LoginScreen} />
-        <Stack.Screen name="Home" component={HomeScreen} />
-        <Stack.Screen name="Call" component={CallScreen} />
-        <Stack.Screen
-          name="IncomingCall"
-          component={IncomingCallScreen}
-          options={{
-            gestureEnabled: false,
-            animation: 'fade',
-          }}
-        />
-        <Stack.Screen name="Chat" component={ChatScreen} />
-        <Stack.Screen name="Settings" component={SettingsScreen} />
-        <Stack.Screen name="AdminPanel" component={AdminPanelScreen} />
-      </Stack.Navigator>
-    </NavigationContainer>
+    <ThemeProvider>
+      <NavigationContainer ref={navigationRef} onReady={() => {
+        isNavigationReady.current = true;
+      }}>
+        <Stack.Navigator
+          initialRouteName="Login"
+          screenOptions={{
+            headerShown: false,
+            animation: 'slide_from_right',
+          }}>
+          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="Home" component={HomeScreen} />
+          <Stack.Screen name="Call" component={CallScreen} />
+          <Stack.Screen
+            name="IncomingCall"
+            component={IncomingCallScreen}
+            options={{
+              gestureEnabled: false,
+              animation: 'fade',
+            }}
+          />
+          <Stack.Screen name="Chat" component={ChatScreen} />
+          <Stack.Screen name="Settings" component={SettingsScreen} />
+          <Stack.Screen name="AdminPanel" component={AdminPanelScreen} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </ThemeProvider>
   );
 }

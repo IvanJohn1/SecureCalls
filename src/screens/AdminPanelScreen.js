@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import SocketService from '../services/SocketService';
+import {useTheme} from '../theme/ThemeContext';
 
 /**
  * ═══════════════════════════════════════════════════════════
@@ -25,6 +26,7 @@ import SocketService from '../services/SocketService';
 
 export default function AdminPanelScreen({route, navigation}) {
   const {username: adminUsername} = route.params;
+  const {colors} = useTheme();
   const [users, setUsers] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');

@@ -58,6 +58,9 @@ class SocketService {
     this._healthCheckTimer = null;
     this._disconnectedSafetyTimer = null;
 
+    // [v14.0] Periodic health probe — prevents silent TCP death (~1h problem)
+    this._periodicHealthInterval = null;
+
     AppState.addEventListener('change', this.handleAppStateChange);
   }
 
@@ -135,23 +138,21 @@ class SocketService {
       // Reset backoff when app comes to foreground
       this.reconnectBackoff = 1000;
 
-      // [v13.0] Proactive health check — don't trust socket.connected after
-      // long background. Send a ping and verify pong arrives.
+      // [v14.0] Proactive health check on resume:
+      // - If pong was >25s ago, force reconnect (timers were frozen)
+      // - If socket reports connected but pong is stale, TCP is dead
       if (this.socket?.connected) {
         const timeSinceLastPong = Date.now() - this._lastPongTime;
         console.log(`[SocketService] Health check: lastPong ${timeSinceLastPong}ms ago`);
 
-        if (timeSinceLastPong > 35000) {
-          // Last successful heartbeat was >35s ago — connection is likely stale.
-          // Android froze timers, the underlying TCP is dead.
-          console.log('[SocketService] ⚠️ Stale connection detected (pong >35s ago) — forcing full reconnect');
+        if (timeSinceLastPong > 25000) {
+          console.log('[SocketService] Stale connection detected — forcing full reconnect');
           this._forceFullReconnect();
           return;
         }
 
-        // Connection looks fresh — send a verification ping
+        // Connection looks fresh — send a verification ping and restart timers
         this.socket.emit('ping', {timestamp: Date.now()});
-        // Start keepalive again (timers might have been deferred in background)
         this.startKeepalive();
       } else {
         console.log('[SocketService] App active, not connected — reconnecting...');
@@ -498,13 +499,37 @@ class SocketService {
       }
     }, 10000);
 
-    console.log('[SocketService] Keepalive started');
+    // [v14.0] Periodic health probe every 5 minutes.
+    // Detects silently dead TCP connections that socket.io's built-in
+    // heartbeat misses (common on mobile after ~1 hour in background).
+    this._periodicHealthInterval = setInterval(() => {
+      if (!this.shouldAutoReconnect || this.isManualDisconnect) return;
+
+      if (this.socket?.connected) {
+        const timeSinceLastPong = Date.now() - this._lastPongTime;
+        if (timeSinceLastPong > 60000) {
+          // No pong for >60s — connection is dead, force reconnect
+          console.log(`[SocketService] Health probe: pong stale (${Math.round(timeSinceLastPong / 1000)}s) — forcing reconnect`);
+          this._forceFullReconnect();
+        }
+      } else if (this.connectionState === STATE.DISCONNECTED) {
+        // Socket reports disconnected but we should be connected — force reconnect
+        console.log('[SocketService] Health probe: disconnected but shouldAutoReconnect — forcing reconnect');
+        this._forceFullReconnect();
+      }
+    }, 300000); // 5 minutes
+
+    console.log('[SocketService] Keepalive + health probe started');
   }
 
   stopKeepalive() {
     if (this.keepaliveInterval) {
       clearInterval(this.keepaliveInterval);
       this.keepaliveInterval = null;
+    }
+    if (this._periodicHealthInterval) {
+      clearInterval(this._periodicHealthInterval);
+      this._periodicHealthInterval = null;
     }
   }
 
