@@ -41,6 +41,14 @@ class WindowsNotificationService {
       console.warn('[WindowsNotification] Toast not available:', e.message);
     }
   }
+
+  async cancelAllNotifications() {
+    // No-op on Windows — no notifee
+  }
+
+  async cancelNotification(notificationId) {
+    // No-op on Windows — no notifee
+  }
 }
 
 export default new WindowsNotificationService();

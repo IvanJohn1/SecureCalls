@@ -22,11 +22,12 @@ import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {createNavigationContainerRef} from '@react-navigation/native';
 import {ThemeProvider} from './src/theme/ThemeContext';
 
-// Screens
+// Screens — EXPLICIT .windows imports for screens that depend on native modules
+// (react-native-webrtc, @notifee/react-native) unavailable on Windows
 import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
-import CallScreen from './src/screens/CallScreen';
-import IncomingCallScreen from './src/screens/IncomingCallScreen';
+import CallScreen from './src/screens/CallScreen.windows';
+import IncomingCallScreen from './src/screens/IncomingCallScreen.windows';
 import ChatScreen from './src/screens/ChatScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import AdminPanelScreen from './src/screens/AdminPanelScreen';

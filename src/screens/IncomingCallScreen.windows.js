@@ -11,7 +11,8 @@ import {
   Alert,
 } from 'react-native';
 import SocketService from '../services/SocketService';
-import NotificationService from '../services/NotificationService';
+// EXPLICIT .windows import — regular NotificationService.js imports @notifee which crashes on Windows
+import NotificationService from '../services/NotificationService.windows';
 
 const {width} = Dimensions.get('window');
 

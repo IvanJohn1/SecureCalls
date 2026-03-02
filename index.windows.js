@@ -15,7 +15,8 @@
  */
 
 import {AppRegistry} from 'react-native';
-import App from './App';
+// EXPLICIT import — do NOT rely on Metro .windows.js auto-resolution
+import App from './App.windows';
 import {name as appName} from './app.json';
 
 console.log('╔════════════════════════════════════════╗');
