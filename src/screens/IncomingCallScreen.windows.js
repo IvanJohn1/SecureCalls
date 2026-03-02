@@ -23,6 +23,8 @@ const {width} = Dimensions.get('window');
  * (который покажет предупреждение о невозможности WebRTC).
  */
 
+console.log('[IncomingCallScreen.windows.js] LOADED — Windows desktop version');
+
 export default function IncomingCallScreen({route, navigation}) {
   const {from, isVideo, username, callId} = route.params;
 

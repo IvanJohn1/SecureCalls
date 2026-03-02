@@ -1,133 +1,37 @@
 @echo off
-chcp 65001 > nul
-setlocal enabledelayedexpansion
-
-echo.
 echo =======================================================
-echo   SecureCall - Windows 10/11 Desktop Build
+echo   SecureCall - Windows Build System
 echo =======================================================
-echo.
 
-:: =========================================================
-:: ПРОВЕРКА PREREQUISITES
-:: =========================================================
+echo [1/6] Installing npm dependencies...
+call npm install
 
-echo [1/8] Проверка Node.js...
-node --version > nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo ОШИБКА: Node.js не найден. Установите Node.js 18+
-    echo    https://nodejs.org/
+echo [2/6] Checking Windows project...
+if not exist "windows\SecureCallApp.sln" (
+    call npx react-native init-windows --overwrite
+)
+
+echo [3/6] Restoring NuGet packages...
+msbuild windows\SecureCallApp.sln -t:Restore -p:RestorePackagesConfig=true -p:Configuration=Release -p:Platform=x64
+
+echo [4/6] Cleaning old JS bundle...
+if exist "windows\SecureCallApp\Bundle" (
+    del /q "windows\SecureCallApp\Bundle\*.*" 2>nul
+)
+if not exist "windows\SecureCallApp\Bundle" mkdir "windows\SecureCallApp\Bundle"
+
+echo [5/6] Bundling JS (platform=windows, entry=index.windows.js, reset-cache)...
+call npx react-native bundle --platform windows --dev false --entry-file index.windows.js --bundle-output windows\SecureCallApp\Bundle\index.windows.bundle --assets-dest windows\SecureCallApp\Bundle --reset-cache
+if errorlevel 1 (
+    echo ERROR: JS bundling failed!
     pause
     exit /b 1
 )
-echo OK: Node.js найден.
 
-echo [2/8] Проверка Visual Studio...
-where MSBuild.exe > nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo ВНИМАНИЕ: MSBuild не найден в PATH.
-    echo    Убедитесь что установлена Visual Studio 2022 с:
-    echo    - Desktop development with C++
-    echo    - Universal Windows Platform development
-    echo    - Windows 10/11 SDK (10.0.19041.0 или новее)
-    echo.
-    echo    Запустите билд из "Developer Command Prompt for VS 2022"
-    echo.
-    echo    Продолжаем установку зависимостей...
-)
+echo [6/6] Building Native App (release, x64)...
+call npx react-native run-windows --release --arch x64 --no-launch --no-packager --logging
 
-:: =========================================================
-:: УСТАНОВКА ЗАВИСИМОСТЕЙ
-:: =========================================================
-
-echo [3/8] Установка npm зависимостей...
-call npm install
-if %ERRORLEVEL% neq 0 (
-    echo ОШИБКА: npm install failed
-    pause
-    exit /b %ERRORLEVEL%
-)
-
-:: Установка react-native-windows если нет
-if not exist "node_modules\react-native-windows" (
-    echo [3.5/8] Установка react-native-windows...
-    call npm install react-native-windows@^0.77.0
-    if %ERRORLEVEL% neq 0 (
-        echo ОШИБКА: react-native-windows install failed
-        pause
-        exit /b %ERRORLEVEL%
-    )
-)
-
-:: =========================================================
-:: ИНИЦИАЛИЗАЦИЯ WINDOWS ПРОЕКТА (если нет)
-:: =========================================================
-
-if not exist "windows" (
-    echo [4/8] Инициализация Windows проекта...
-    call npx react-native-windows-init --overwrite --language cs
-    if %ERRORLEVEL% neq 0 (
-        echo ОШИБКА: react-native-windows-init failed
-        echo    Убедитесь что Visual Studio 2022 установлена
-        pause
-        exit /b %ERRORLEVEL%
-    )
-) else (
-    echo [4/8] Windows проект уже инициализирован.
-)
-
-:: =========================================================
-:: ОЧИСТКА КЭШЕЙ
-:: =========================================================
-
-echo [5/8] Очистка кэшей Metro и React...
-powershell -Command "Remove-Item -Recurse -Force $env:TEMP\metro-* -ErrorAction Ignore"
-powershell -Command "Remove-Item -Recurse -Force $env:TEMP\react-* -ErrorAction Ignore"
-
-:: =========================================================
-:: ГЕНЕРАЦИЯ JS BUNDLE
-:: =========================================================
-
-echo [6/8] Генерация JS Bundle для Windows...
-if not exist "windows\Bundle" mkdir "windows\Bundle"
-
-set BUNDLE_CMD=npx react-native bundle --platform windows --dev false --entry-file index.js --bundle-output windows\Bundle\index.windows.bundle --assets-dest windows\Bundle
-call %BUNDLE_CMD%
-if %ERRORLEVEL% neq 0 (
-    echo ОШИБКА: Не удалось сгенерировать JS bundle
-    pause
-    exit /b %ERRORLEVEL%
-)
-
-:: =========================================================
-:: СБОРКА WINDOWS ПРИЛОЖЕНИЯ
-:: =========================================================
-
-echo [7/8] Сборка Windows Release...
-call npx react-native run-windows --release --arch x64 --no-launch
-if %ERRORLEVEL% neq 0 (
-    echo.
-    echo ВНИМАНИЕ: Автоматическая сборка не удалась.
-    echo    Попробуйте:
-    echo    1. Открыть windows\SecureCallApp.sln в Visual Studio 2022
-    echo    2. Выбрать Release / x64
-    echo    3. Build - Build Solution
-    echo.
-    echo    Или из командной строки:
-    echo    msbuild windows\SecureCallApp.sln /p:Configuration=Release /p:Platform=x64
-    echo.
-    pause
-    exit /b %ERRORLEVEL%
-)
-
-echo [8/8] Сборка завершена!
-echo.
 echo =======================================================
-echo   Файлы приложения находятся в:
-echo   windows\x64\Release\SecureCallApp\
-echo.
-echo   Для запуска:
-echo   npx react-native run-windows --release --arch x64
+echo   Build complete!
 echo =======================================================
-echo.
 pause

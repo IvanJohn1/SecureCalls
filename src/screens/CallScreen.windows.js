@@ -22,6 +22,8 @@ const {width, height} = Dimensions.get('window');
  * Сигнализация через Socket.IO работает корректно.
  */
 
+console.log('[CallScreen.windows.js] LOADED — Windows desktop version (no WebRTC)');
+
 export default function CallScreen({route, navigation}) {
   const {username, peer, isVideo, isCaller, callId: initialCallId} = route.params;
 
