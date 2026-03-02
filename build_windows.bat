@@ -47,13 +47,30 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [5/6] Restoring NuGet packages...
-msbuild windows\SecureCallApp.sln /t:Restore /p:RestorePackagesConfig=true /p:Configuration=Release /p:Platform=x64
+echo [5/7] Restoring NuGet packages (packages.config)...
+:: C++ native modules (react-native-screens, async-storage) use packages.config
+:: which stores packages in windows\packages\. MSBuild /t:Restore only handles
+:: PackageReference-style projects, so we need nuget.exe for packages.config.
+where nuget >nul 2>nul
+if errorlevel 1 (
+    echo        nuget.exe not in PATH, downloading...
+    powershell -Command "Invoke-WebRequest -Uri 'https://dist.nuget.org/win-x86-commandline/latest/nuget.exe' -OutFile '%~dp0nuget.exe'"
+    "%~dp0nuget.exe" restore windows\SecureCallApp.sln
+) else (
+    nuget restore windows\SecureCallApp.sln
+)
 if errorlevel 1 (
     echo WARNING: NuGet restore had issues. Trying build anyway...
 )
 
-echo [6/6] Building native app...
+echo [6/7] Restoring NuGet packages (PackageReference)...
+:: For .NET/C# projects that use PackageReference style.
+msbuild windows\SecureCallApp.sln /t:Restore /p:Configuration=Release /p:Platform=x64
+if errorlevel 1 (
+    echo WARNING: MSBuild restore had issues. Trying build anyway...
+)
+
+echo [7/7] Building native app...
 :: RunAutolinkCheck=false: skip the in-build check (we ran autolink in step 3).
 :: BundleEntryFile / BundleRootDir: tell MSBuild to use our pre-bundled JS.
 msbuild windows\SecureCallApp.sln /p:Configuration=Release /p:Platform=x64 /p:AppxBundle=Never /p:RunAutolinkCheck=false /p:BundleEntryFile=index.windows.js /maxcpucount
