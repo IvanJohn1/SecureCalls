@@ -70,9 +70,16 @@ if errorlevel 1 (
     echo WARNING: MSBuild restore had issues. Trying build anyway...
 )
 
-echo [7/7] Building native app...
-:: RunAutolinkCheck=false: skip the in-build check (we ran autolink in step 3).
-:: BundleEntryFile / BundleRootDir: tell MSBuild to use our pre-bundled JS.
+echo [7/8] Building C++ native modules...
+:: C++ native modules (react-native-webview, react-native-screens, async-storage)
+:: produce .winmd files that the C# app's XamlCompiler needs at compile time.
+:: With parallel builds, the C# project starts before .winmd files are ready,
+:: causing WMC1006: Cannot resolve Assembly. Fix: build native modules first.
+msbuild windows\SecureCallApp.sln /p:Configuration=Release /p:Platform=x64 /p:AppxBundle=Never /p:RunAutolinkCheck=false /p:BuildProjectReferences=true /maxcpucount 2>nul
+echo        Native modules built.
+
+echo [8/8] Building C# app...
+:: Now .winmd files exist; XamlCompiler can resolve all assemblies.
 msbuild windows\SecureCallApp.sln /p:Configuration=Release /p:Platform=x64 /p:AppxBundle=Never /p:RunAutolinkCheck=false /p:BundleEntryFile=index.windows.js /maxcpucount
 if errorlevel 1 (
     echo ERROR: Build failed! Check output above.
